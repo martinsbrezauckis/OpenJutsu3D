@@ -1,0 +1,754 @@
+{
+ "_doc": "Scene Kit material library v0. Keys are semantic presets; a scene's material label (e.g. 'aged_brass', 'wet_stone_floor') is resolved by kit.js to the best preset via aliases/tokens, then modifiers (aged/wet/polished/dark/...) adjust it. 'tex' = Poly Haven asset id (CC0, fetched by fetch_textures.py; tile size comes from the asset's real dimensions). Presets without 'tex' are parametric PBR. Colours are linear-ish sRGB hex. Resolution: pass 1 matches preset keys + 'aliases' (material words); pass 2 matches 'objects' (object words that imply a material) only if pass 1 found nothing. Presets may carry emissive/emissiveIntensity. Presets with \"surface\": true (water) are SURFACE EFFECTS: hidden in the clay pass (no disc in the L2R layout) and given screen-space reflections in the lit pass.",
+ "stone_wall": {
+  "tex": "castle_wall_slates",
+  "aliases": [
+   "castle_wall",
+   "dungeon_wall",
+   "footing_stones",
+   "masonry",
+   "rubble",
+   "rubble_stone",
+   "stone",
+   "stones",
+   "stonework"
+  ]
+ },
+ "stone_block": {
+  "tex": "stone_brick_wall_001",
+  "aliases": [
+   "ashlar",
+   "basalt",
+   "column_stone",
+   "dressed_stone",
+   "granite",
+   "limestone",
+   "pillar_stone",
+   "sandstone",
+   "slate",
+   "stone_brick",
+   "stone_masonry"
+  ],
+  "objects": [
+   "arch",
+   "column",
+   "columns",
+   "pillar",
+   "plinth",
+   "stair",
+   "stairs",
+   "statue",
+   "steps",
+   "vault"
+  ]
+ },
+ "stone_floor": {
+  "tex": "stone_tiles_02",
+  "aliases": [
+   "flagstone",
+   "flagstones",
+   "floor_stone",
+   "slab",
+   "paving"
+  ]
+ },
+ "cobblestone": {
+  "tex": "cobblestone_floor_04",
+  "aliases": [
+   "cobble",
+   "cobbles",
+   "street"
+  ]
+ },
+ "brick": {
+  "tex": "red_brick",
+  "aliases": [
+   "bricks",
+   "red_brick",
+   "brickwork"
+  ]
+ },
+ "plaster": {
+  "tex": "painted_plaster_wall",
+  "aliases": [
+   "stucco",
+   "drywall",
+   "wall_paint",
+   "render"
+  ]
+ },
+ "concrete": {
+  "tex": "concrete_floor_worn_001",
+  "aliases": [
+   "bunker",
+   "cement",
+   "cement_render",
+   "grout",
+   "lime_mortar",
+   "mortar"
+  ]
+ },
+ "dirt": {
+  "tex": "brown_mud_dry",
+  "aliases": [
+   "mud",
+   "soil",
+   "earth",
+   "ground",
+   "clay_ground"
+  ]
+ },
+ "rock": {
+  "tex": "rock_face_03",
+  "aliases": [
+   "cliff",
+   "boulder",
+   "cave",
+   "cave_rock",
+   "bedrock"
+  ]
+ },
+ "sand": {
+  "tex": "sand_01",
+  "aliases": [
+   "beach",
+   "desert",
+   "dune"
+  ]
+ },
+ "gravel": {
+  "tex": "rocky_trail",
+  "aliases": [
+   "pebbles",
+   "trail"
+  ]
+ },
+ "grass": {
+  "tex": "leafy_grass",
+  "aliases": [
+   "lawn",
+   "meadow",
+   "turf"
+  ]
+ },
+ "forest_floor": {
+  "tex": "forest_ground_04",
+  "aliases": [
+   "leaves",
+   "moss_ground",
+   "undergrowth"
+  ]
+ },
+ "snow": {
+  "tex": "snow_02",
+  "aliases": [
+   "ice_ground",
+   "frost"
+  ]
+ },
+ "asphalt": {
+  "tex": "asphalt_02",
+  "aliases": [
+   "road",
+   "tarmac"
+  ]
+ },
+ "wood_planks": {
+  "tex": "weathered_brown_planks",
+  "aliases": [
+   "planks",
+   "floorboards",
+   "boards",
+   "deck",
+   "wooden_floor"
+  ]
+ },
+ "wood": {
+  "tex": "dark_wooden_planks",
+  "aliases": [
+   "oak",
+   "timber",
+   "walnut",
+   "lumber",
+   "furniture_wood"
+  ],
+  "objects": [
+   "barrel",
+   "beam",
+   "beams",
+   "chair",
+   "crate",
+   "door",
+   "shelf",
+   "shelves",
+   "table"
+  ]
+ },
+ "weathered_wood": {
+  "tex": "rough_wood",
+  "aliases": [
+   "old_wood",
+   "rough_wood",
+   "barn_wood",
+   "driftwood",
+   "rotten_wood"
+  ]
+ },
+ "dark_wood": {
+  "tex": "weathered_brown_planks",
+  "aliases": [
+   "ebony",
+   "mahogany",
+   "stained_wood"
+  ]
+ },
+ "bark": {
+  "tex": "bark_brown_02",
+  "aliases": [
+   "tree_bark"
+  ],
+  "objects": [
+   "log",
+   "trunk"
+  ]
+ },
+ "leather": {
+  "tex": "brown_leather",
+  "aliases": [
+   "hide"
+  ],
+  "objects": [
+   "belt",
+   "belts",
+   "book",
+   "books",
+   "saddle",
+   "strap",
+   "straps"
+  ]
+ },
+ "fabric": {
+  "tex": "hessian_230",
+  "aliases": [
+   "burlap",
+   "canvas",
+   "cloth",
+   "cotton",
+   "felt",
+   "hessian",
+   "linen",
+   "rag",
+   "rags",
+   "sackcloth",
+   "wool"
+  ],
+  "objects": [
+   "carpet",
+   "curtain",
+   "curtains",
+   "cushion",
+   "rope",
+   "rug",
+   "sack",
+   "tapestry"
+  ]
+ },
+ "marble": {
+  "tex": "marble_01",
+  "aliases": [
+   "polished_stone",
+   "statue_stone"
+  ]
+ },
+ "tiles": {
+  "tex": "floor_tiles_06",
+  "aliases": [
+   "tile",
+   "ceramic_tiles",
+   "bathroom_tiles"
+  ]
+ },
+ "roof_tiles": {
+  "tex": "clay_roof_tiles_02",
+  "aliases": [
+   "roof",
+   "shingles"
+  ]
+ },
+ "rusty_metal": {
+  "tex": "rusty_metal_02",
+  "aliases": [
+   "rust",
+   "rusted",
+   "corroded_metal",
+   "scrap"
+  ]
+ },
+ "metal_plate": {
+  "tex": "metal_plate",
+  "aliases": [
+   "sheet_metal",
+   "plate",
+   "hull",
+   "floor_plate"
+  ]
+ },
+ "corrugated": {
+  "tex": "corrugated_iron",
+  "aliases": [
+   "corrugated_iron",
+   "tin_roof",
+   "shed_wall"
+  ]
+ },
+ "iron": {
+  "color": "#3b3a38",
+  "metalness": 1.0,
+  "roughness": 0.62,
+  "aliases": [
+   "black_iron",
+   "cast_iron",
+   "forged",
+   "wrought",
+   "wrought_iron"
+  ],
+  "objects": [
+   "anvil",
+   "bars",
+   "cage",
+   "chain",
+   "chains",
+   "hinge",
+   "hinges",
+   "manacle",
+   "manacles",
+   "nail",
+   "nails",
+   "rivets"
+  ]
+ },
+ "steel": {
+  "color": "#8a8d91",
+  "metalness": 1.0,
+  "roughness": 0.35,
+  "aliases": [
+   "aluminium",
+   "aluminum",
+   "galvanized",
+   "gunmetal",
+   "iron_steel",
+   "machine_steel",
+   "pewter",
+   "stainless",
+   "tin",
+   "zinc"
+  ],
+  "objects": [
+   "blade",
+   "knife",
+   "sword",
+   "tool",
+   "tools"
+  ]
+ },
+ "brass": {
+  "color": "#a07a35",
+  "metalness": 1.0,
+  "roughness": 0.42,
+  "aliases": [
+   "bronze_yellow"
+  ],
+  "objects": [
+   "fittings",
+   "gauge",
+   "gear",
+   "gears",
+   "handwheel",
+   "instrument",
+   "valve"
+  ]
+ },
+ "bronze": {
+  "color": "#8c5f32",
+  "metalness": 1.0,
+  "roughness": 0.45,
+  "aliases": [
+   "statue_bronze"
+  ]
+ },
+ "copper": {
+  "color": "#b06a3e",
+  "metalness": 1.0,
+  "roughness": 0.42,
+  "aliases": [
+   "boiler_copper"
+  ],
+  "objects": [
+   "boiler",
+   "kettle",
+   "pipe",
+   "pipes"
+  ]
+ },
+ "gold": {
+  "color": "#d4a83a",
+  "metalness": 1.0,
+  "roughness": 0.3,
+  "aliases": [
+   "gilded",
+   "gilt"
+  ]
+ },
+ "silver": {
+  "color": "#c9c9c7",
+  "metalness": 1.0,
+  "roughness": 0.2,
+  "aliases": [
+   "silverware"
+  ]
+ },
+ "chrome": {
+  "color": "#e0e0e0",
+  "metalness": 1.0,
+  "roughness": 0.05,
+  "aliases": [
+   "mirror_metal",
+   "polished_metal"
+  ]
+ },
+ "glass": {
+  "color": "#ffffff",
+  "metalness": 0.0,
+  "roughness": 0.03,
+  "transmission": 1.0,
+  "ior": 1.5,
+  "aliases": [],
+  "objects": [
+   "bottle",
+   "jar",
+   "lens",
+   "pane",
+   "panes",
+   "window",
+   "windows"
+  ]
+ },
+ "water": {
+  "color": "#1b2226",
+  "metalness": 0.0,
+  "roughness": 0.02,
+  "transmission": 0.0,
+  "ior": 1.33,
+  "aliases": [
+   "puddle",
+   "pool",
+   "pond",
+   "river"
+  ],
+  "surface": true
+ },
+ "plastic": {
+  "color": "#d0d0d0",
+  "metalness": 0.0,
+  "roughness": 0.4,
+  "aliases": [
+   "vinyl",
+   "polymer"
+  ],
+  "objects": [
+   "console",
+   "screen_bezel"
+  ]
+ },
+ "rubber": {
+  "color": "#1c1c1c",
+  "metalness": 0.0,
+  "roughness": 0.9,
+  "aliases": [
+   "bakelite",
+   "ebonite"
+  ],
+  "objects": [
+   "hose",
+   "tire"
+  ]
+ },
+ "paint": {
+  "color": "#c8c2b6",
+  "metalness": 0.0,
+  "roughness": 0.55,
+  "aliases": [
+   "enamel",
+   "enamel_paint",
+   "lacquer",
+   "painted"
+  ]
+ },
+ "bone": {
+  "color": "#d8cdb2",
+  "metalness": 0.0,
+  "roughness": 0.65,
+  "aliases": [
+   "bones",
+   "ivory"
+  ],
+  "objects": [
+   "skeleton",
+   "skull"
+  ]
+ },
+ "ceramic": {
+  "color": "#e8e3d8",
+  "metalness": 0.0,
+  "roughness": 0.3,
+  "aliases": [
+   "enamel",
+   "porcelain"
+  ],
+  "objects": [
+   "pot",
+   "pottery",
+   "vase"
+  ]
+ },
+ "wax": {
+  "color": "#efe6cf",
+  "metalness": 0.0,
+  "roughness": 0.5,
+  "aliases": [],
+  "objects": [
+   "candle",
+   "candles"
+  ]
+ },
+ "coal": {
+  "color": "#121110",
+  "metalness": 0.0,
+  "roughness": 0.95,
+  "aliases": [
+   "coals",
+   "soot",
+   "charcoal",
+   "ash"
+  ]
+ },
+ "foliage": {
+  "color": "#3f5a2a",
+  "metalness": 0.0,
+  "roughness": 0.8,
+  "aliases": [
+   "plant",
+   "plants",
+   "bush",
+   "ivy",
+   "tree_leaves"
+  ]
+ },
+ "person": {
+  "color": "#a9a39a",
+  "metalness": 0.0,
+  "roughness": 0.7,
+  "aliases": [
+   "mannequin"
+  ],
+  "objects": [
+   "body",
+   "figure"
+  ]
+ },
+ "_modifiers": {
+  "aged": {
+   "roughness": 0.15,
+   "darken": 0.15
+  },
+  "old": {
+   "roughness": 0.12,
+   "darken": 0.12
+  },
+  "tarnished": {
+   "roughness": 0.2,
+   "darken": 0.2
+  },
+  "worn": {
+   "roughness": 0.1,
+   "darken": 0.05
+  },
+  "rusty": {
+   "roughness": 0.25,
+   "darken": 0.2
+  },
+  "dirty": {
+   "roughness": 0.12,
+   "darken": 0.15
+  },
+  "mossy": {
+   "roughness": 0.1,
+   "darken": 0.1
+  },
+  "wet": {
+   "roughness": -0.35,
+   "darken": 0.25
+  },
+  "polished": {
+   "roughness": -0.25
+  },
+  "glossy": {
+   "roughness": -0.3
+  },
+  "dark": {
+   "darken": 0.35
+  },
+  "black": {
+   "darken": 0.6
+  },
+  "light": {
+   "darken": -0.2
+  },
+  "pale": {
+   "darken": -0.25
+  },
+  "white": {
+   "darken": -0.4
+  },
+  "grime": {
+   "roughness": 0.1,
+   "darken": 0.2
+  },
+  "grimy": {
+   "roughness": 0.1,
+   "darken": 0.2
+  },
+  "mouldy": {
+   "roughness": 0.1,
+   "darken": 0.15
+  },
+  "moldy": {
+   "roughness": 0.1,
+   "darken": 0.15
+  },
+  "crumbling": {
+   "roughness": 0.1,
+   "darken": 0.05
+  },
+  "yellowed": {
+   "darken": 0.1
+  },
+  "soaked": {
+   "roughness": -0.2,
+   "darken": 0.2
+  },
+  "dented": {},
+  "cold": {},
+  "moss": {
+   "roughness": 0.1,
+   "darken": 0.1
+  },
+  "streaked": {
+   "darken": 0.05
+  },
+  "distressed": {
+   "roughness": 0.12,
+   "darken": 0.12
+  },
+  "scarred": {
+   "roughness": 0.1,
+   "darken": 0.1
+  },
+  "heavy": {},
+  "oiled": {
+   "roughness": -0.1,
+   "darken": 0.1
+  },
+  "blackened": {
+   "darken": 0.4
+  },
+  "sooty": {
+   "roughness": 0.1,
+   "darken": 0.3
+  },
+  "soot": {
+   "roughness": 0.1,
+   "darken": 0.3
+  },
+  "oxidized": {
+   "roughness": 0.2,
+   "darken": 0.15
+  }
+ },
+ "ember": {
+  "color": "#1a0e08",
+  "metalness": 0.0,
+  "roughness": 0.9,
+  "emissive": "#ff6a1f",
+  "emissiveIntensity": 3.0,
+  "aliases": [
+   "embers",
+   "fire",
+   "flame",
+   "flames",
+   "glow",
+   "lava",
+   "coal_glow",
+   "hot_coals"
+  ],
+  "objects": [
+   "furnace",
+   "brazier",
+   "torch_flame"
+  ]
+ },
+ "lamp_light": {
+  "color": "#fff3dc",
+  "metalness": 0.0,
+  "roughness": 0.4,
+  "emissive": "#ffd59a",
+  "emissiveIntensity": 4.0,
+  "aliases": [
+   "mantle",
+   "bulb",
+   "filament",
+   "lamp_glow",
+   "light_panel",
+   "neon",
+   "led"
+  ],
+  "objects": [
+   "lamp",
+   "lantern",
+   "sign"
+  ]
+ },
+ "straw": {
+  "color": "#b89a5a",
+  "metalness": 0.0,
+  "roughness": 0.95,
+  "aliases": [
+   "hay",
+   "thatch",
+   "reed",
+   "reeds"
+  ],
+  "objects": [
+   "bale",
+   "bedding"
+  ]
+ },
+ "paper": {
+  "color": "#e6dcc3",
+  "metalness": 0.0,
+  "roughness": 0.85,
+  "aliases": [
+   "parchment",
+   "blueprint",
+   "vellum",
+   "cardboard"
+  ],
+  "objects": [
+   "map",
+   "scroll",
+   "poster",
+   "note",
+   "letter"
+  ]
+ }
+}

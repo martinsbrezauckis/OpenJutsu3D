@@ -1,0 +1,2 @@
+Models in this folder: Poly Haven (https://polyhaven.com), CC0 1.0 Universal (public domain).
+Each entry's source page is listed in index.json.

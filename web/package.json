@@ -1,0 +1,30 @@
+{
+  "name": "open-3d-jutsu",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync-kit": "node scripts/sync-kit.mjs",
+    "predev": "node scripts/sync-kit.mjs",
+    "prebuild": "node scripts/sync-kit.mjs",
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "test": "tsc --noEmit && node ../bench/cost_mock_test.mjs && node ../bench/openai_route_mock_test.mts && node ../bench/segments_test.mts && node ../bench/zip_guard_test.mts && node ../bench/ip_policy_test.mts"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "dependencies": {
+    "@comfyorg/sdk": "0.5.0",
+    "next": "^16.3.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "typescript": "^7.0.2"
+  },
+  "license": "MIT"
+}

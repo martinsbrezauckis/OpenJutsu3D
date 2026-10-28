@@ -1,0 +1,337 @@
+[
+ {
+  "id": "barrel_01",
+  "file": "barrel_01.glb",
+  "preview": "barrel_01.png",
+  "name": "Barrel 1",
+  "tags": [
+   "barrel",
+   "oil",
+   "explosive",
+   "radioactive",
+   "metal",
+   "red barrel",
+   "oil barrel",
+   "drums"
+  ],
+  "category": "industrial",
+  "height_m": 0.88,
+  "style": "realistic",
+  "bytes": 691964,
+  "source": "https://polyhaven.com/a/Barrel_01"
+ },
+ {
+  "id": "wooden_crate_02",
+  "file": "wooden_crate_02.glb",
+  "preview": "wooden_crate_02.png",
+  "name": "Wooden Crate 2",
+  "tags": [
+   "vintage",
+   "wood",
+   "old",
+   "wooden",
+   "worn",
+   "colonial",
+   "commercial",
+   "maritime"
+  ],
+  "category": "containers",
+  "height_m": 0.46,
+  "style": "realistic",
+  "bytes": 2234644,
+  "source": "https://polyhaven.com/a/wooden_crate_02"
+ },
+ {
+  "id": "wooden_lantern_01",
+  "file": "wooden_lantern_01.glb",
+  "preview": "wooden_lantern_01.png",
+  "name": "Wooden Lantern 1",
+  "tags": [
+   "lantern",
+   "wooden",
+   "wood",
+   "old",
+   "worn",
+   "farmhouse",
+   "maritime",
+   "colonial"
+  ],
+  "category": "props",
+  "height_m": 0.53,
+  "style": "realistic",
+  "bytes": 3765136,
+  "source": "https://polyhaven.com/a/wooden_lantern_01"
+ },
+ {
+  "id": "lantern_01",
+  "file": "lantern_01.glb",
+  "preview": "lantern_01.png",
+  "name": "Lantern 1",
+  "tags": [
+   "prop",
+   "metal",
+   "glass",
+   "lantern",
+   "antique",
+   "vintage",
+   "hurricane",
+   "lamp"
+  ],
+  "category": "props",
+  "height_m": 0.29,
+  "style": "realistic",
+  "bytes": 1559596,
+  "source": "https://polyhaven.com/a/Lantern_01"
+ },
+ {
+  "id": "street_lamp_02",
+  "file": "street_lamp_02.glb",
+  "preview": "street_lamp_02.png",
+  "name": "Street Lamp 2",
+  "tags": [
+   "street",
+   "road",
+   "light",
+   "lamppost",
+   "outdoor",
+   "pole",
+   "sidewalk",
+   "night"
+  ],
+  "category": "lighting",
+  "height_m": 1.68,
+  "style": "realistic",
+  "bytes": 2171484,
+  "source": "https://polyhaven.com/a/street_lamp_02"
+ },
+ {
+  "id": "painted_wooden_chair_01",
+  "file": "painted_wooden_chair_01.glb",
+  "preview": "painted_wooden_chair_01.png",
+  "name": "Painted Wooden Chair 1",
+  "tags": [
+   "chair",
+   "wood",
+   "painted",
+   "farmhouse",
+   "dining",
+   "diner",
+   "american",
+   "kitchen"
+  ],
+  "category": "furniture",
+  "height_m": 0.96,
+  "style": "realistic",
+  "bytes": 491540,
+  "source": "https://polyhaven.com/a/painted_wooden_chair_01"
+ },
+ {
+  "id": "woodentable_01",
+  "file": "woodentable_01.glb",
+  "preview": "woodentable_01.png",
+  "name": "Wooden Table 1",
+  "tags": [
+   "vintage",
+   "wood",
+   "prop",
+   "table",
+   "school",
+   "desk",
+   "old",
+   "worn"
+  ],
+  "category": "furniture",
+  "height_m": 0.55,
+  "style": "realistic",
+  "bytes": 553376,
+  "source": "https://polyhaven.com/a/WoodenTable_01"
+ },
+ {
+  "id": "sofa_01",
+  "file": "sofa_01.glb",
+  "preview": "sofa_01.png",
+  "name": "Sofa 1",
+  "tags": [
+   "wood",
+   "prop",
+   "furniture",
+   "vintage",
+   "gothic",
+   "chair",
+   "couch",
+   "victorian"
+  ],
+  "category": "furniture",
+  "height_m": 0.8,
+  "style": "realistic",
+  "bytes": 516996,
+  "source": "https://polyhaven.com/a/Sofa_01"
+ },
+ {
+  "id": "shelf_01",
+  "file": "shelf_01.glb",
+  "preview": "shelf_01.png",
+  "name": "Shelf 1",
+  "tags": [
+   "wood",
+   "shelf",
+   "furniture",
+   "storage",
+   "home",
+   "organization",
+   "display",
+   "wooden"
+  ],
+  "category": "furniture",
+  "height_m": 2.08,
+  "style": "realistic",
+  "bytes": 604500,
+  "source": "https://polyhaven.com/a/Shelf_01"
+ },
+ {
+  "id": "planter_pot_clay",
+  "file": "planter_pot_clay.glb",
+  "preview": "planter_pot_clay.png",
+  "name": "Planter Pot Clay",
+  "tags": [
+   "outdoor",
+   "mossy",
+   "dirty",
+   "used",
+   "worn",
+   "shed",
+   "garden",
+   "gardening"
+  ],
+  "category": "containers",
+  "height_m": 0.22,
+  "style": "realistic",
+  "bytes": 1796136,
+  "source": "https://polyhaven.com/a/planter_pot_clay"
+ },
+ {
+  "id": "anthurium_botany_01",
+  "file": "anthurium_botany_01.glb",
+  "preview": "anthurium_botany_01.png",
+  "name": "Anthurium Botany 1",
+  "tags": [
+   "nature",
+   "bush",
+   "leaf",
+   "shrub",
+   "leaves",
+   "forest",
+   "plant",
+   "green"
+  ],
+  "category": "plants",
+  "height_m": 0.51,
+  "style": "realistic",
+  "bytes": 3236016,
+  "source": "https://polyhaven.com/a/anthurium_botany_01"
+ },
+ {
+  "id": "fern_02",
+  "file": "fern_02.glb",
+  "preview": "fern_02.png",
+  "name": "Fern 2",
+  "tags": [
+   "plant",
+   "fern",
+   "foliage",
+   "jungle",
+   "shrub",
+   "bush",
+   "leaf",
+   "leaves"
+  ],
+  "category": "plants",
+  "height_m": 0.43,
+  "style": "realistic",
+  "bytes": 1143580,
+  "source": "https://polyhaven.com/a/fern_02"
+ },
+ {
+  "id": "television_01",
+  "file": "television_01.glb",
+  "preview": "television_01.png",
+  "name": "Television 1",
+  "tags": [
+   "vintage",
+   "prop",
+   "furniture",
+   "metal",
+   "wood",
+   "tv",
+   "television",
+   "video"
+  ],
+  "category": "props",
+  "height_m": 0.46,
+  "style": "realistic",
+  "bytes": 530228,
+  "source": "https://polyhaven.com/a/Television_01"
+ },
+ {
+  "id": "industrial_wall_lamp",
+  "file": "industrial_wall_lamp.glb",
+  "preview": "industrial_wall_lamp.png",
+  "name": "Industrial Wall Lamp",
+  "tags": [
+   "industrial",
+   "factory",
+   "warehouse",
+   "wall light",
+   "metal",
+   "bunker",
+   "mine"
+  ],
+  "category": "lighting",
+  "height_m": 0.43,
+  "style": "realistic",
+  "bytes": 3776172,
+  "source": "https://polyhaven.com/a/industrial_wall_lamp"
+ },
+ {
+  "id": "coffeecart_01",
+  "file": "coffeecart_01.glb",
+  "preview": "coffeecart_01.png",
+  "name": "Coffee Cart 1",
+  "tags": [
+   "table",
+   "metal",
+   "shelf",
+   "plastic",
+   "cart",
+   "coffee",
+   "portable",
+   "wheels"
+  ],
+  "category": "appliances",
+  "height_m": 1.72,
+  "style": "realistic",
+  "bytes": 1833040,
+  "source": "https://polyhaven.com/a/CoffeeCart_01"
+ },
+ {
+  "id": "wine_barrel_01",
+  "file": "wine_barrel_01.glb",
+  "preview": "wine_barrel_01.png",
+  "name": "Wine Barrel 1",
+  "tags": [
+   "barrel",
+   "wine",
+   "celler",
+   "old",
+   "worn",
+   "grape",
+   "farmhouse",
+   "farm"
+  ],
+  "category": "containers",
+  "height_m": 0.87,
+  "style": "realistic",
+  "bytes": 922024,
+  "source": "https://polyhaven.com/a/wine_barrel_01"
+ }
+]

@@ -1,0 +1,369 @@
+{
+ "asphalt_02": {
+  "size_m": [
+   3.0,
+   3.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/asphalt_02"
+ },
+ "bark_brown_02": {
+  "size_m": [
+   1.0,
+   1.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/bark_brown_02"
+ },
+ "brown_leather": {
+  "size_m": [
+   0.4,
+   0.4
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/brown_leather"
+ },
+ "brown_mud_dry": {
+  "size_m": [
+   1.3,
+   1.3
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/brown_mud_dry"
+ },
+ "castle_wall_slates": {
+  "size_m": [
+   2.5,
+   2.5
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/castle_wall_slates"
+ },
+ "clay_roof_tiles_02": {
+  "size_m": [
+   2.5,
+   2.5
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/clay_roof_tiles_02"
+ },
+ "cobblestone_floor_04": {
+  "size_m": [
+   1.5,
+   1.5
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/cobblestone_floor_04"
+ },
+ "concrete_floor_worn_001": {
+  "size_m": [
+   3.0,
+   3.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/concrete_floor_worn_001"
+ },
+ "corrugated_iron": {
+  "size_m": [
+   1.12,
+   1.12
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough",
+   "metal"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/corrugated_iron"
+ },
+ "dark_wooden_planks": {
+  "size_m": [
+   2.0,
+   2.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/dark_wooden_planks"
+ },
+ "floor_tiles_06": {
+  "size_m": [
+   3.0,
+   3.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/floor_tiles_06"
+ },
+ "forest_ground_04": {
+  "size_m": [
+   3.15,
+   3.15
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/forest_ground_04"
+ },
+ "leafy_grass": {
+  "size_m": [
+   2.0,
+   2.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/leafy_grass"
+ },
+ "marble_01": {
+  "size_m": [
+   1.5,
+   1.5
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/marble_01"
+ },
+ "metal_plate": {
+  "size_m": [
+   0.5,
+   0.5
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough",
+   "metal"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/metal_plate"
+ },
+ "oak_veneer_01": {
+  "size_m": [
+   1.83,
+   1.83
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/oak_veneer_01"
+ },
+ "painted_plaster_wall": {
+  "size_m": [
+   2.0,
+   2.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/painted_plaster_wall"
+ },
+ "red_brick": {
+  "size_m": [
+   1.4,
+   1.4
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/red_brick"
+ },
+ "rock_face_03": {
+  "size_m": [
+   2.7,
+   2.7
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/rock_face_03"
+ },
+ "rocky_trail": {
+  "size_m": [
+   2.0,
+   2.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/rocky_trail"
+ },
+ "rough_wood": {
+  "size_m": [
+   0.5,
+   0.5
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/rough_wood"
+ },
+ "rusty_metal_02": {
+  "size_m": [
+   1.0,
+   1.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/rusty_metal_02"
+ },
+ "sand_01": {
+  "size_m": [
+   1.5,
+   1.5
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/sand_01"
+ },
+ "snow_02": {
+  "size_m": [
+   2.0,
+   2.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/snow_02"
+ },
+ "stone_brick_wall_001": {
+  "size_m": [
+   2.5,
+   2.5
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/stone_brick_wall_001"
+ },
+ "stone_tiles_02": {
+  "size_m": [
+   2.0,
+   2.0
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/stone_tiles_02"
+ },
+ "weathered_brown_planks": {
+  "size_m": [
+   1.8,
+   1.8
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/weathered_brown_planks"
+ },
+ "hessian_230": {
+  "size_m": [
+   0.269,
+   0.267
+  ],
+  "maps": [
+   "diff",
+   "nor_gl",
+   "rough",
+   "metal"
+  ],
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/hessian_230"
+ }
+}

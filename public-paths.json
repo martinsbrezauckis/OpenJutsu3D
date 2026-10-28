@@ -1,0 +1,42 @@
+{
+  "_doc": "Public export allow-list (tools/public-export.mjs). Only TRACKED files matching an include are exported; a path ending in / is a folder. Not listed = not public. Private patterns the export must not contain live in tools/export-forbidden.json (never exported).",
+  "include": [
+    "README.md",
+    "LICENSE",
+    "public-paths.json",
+    "tools/public-export.mjs",
+    "web/",
+    "spike/scenekit/BUILDER_PROMPT.md",
+    "spike/scenekit/DIRECTOR_PROMPT.md",
+    "spike/scenekit/kit.js",
+    "spike/scenekit/viewer-core.js",
+    "spike/scenekit/studio.html",
+    "spike/scenekit/camera-moves.js",
+    "spike/scenekit/prompt-compiler.js",
+    "spike/scenekit/materials.json",
+    "spike/scenekit/fetch_textures.py",
+    "spike/scenekit/assets/fonts/",
+    "spike/scenekit/assets/textures/manifest.json",
+    "bench/debug_api.py",
+    "bench/browser_gl.py",
+    "bench/e2e_ui.py",
+    "bench/e2e_edit.py",
+    "bench/e2e_p7.py",
+    "bench/e2e_library.py",
+    "bench/e2e_newscene.py",
+    "bench/build_library.py",
+    "bench/caption_library.py",
+    "bench/build_samples.mts",
+    "bench/cost_mock_test.mjs",
+    "bench/openai_route_mock_test.mts",
+    "bench/segments_test.mts",
+    "bench/zip_guard_test.mts",
+    "bench/ip_policy_test.mts",
+    "bench/safe_fetch_test.mts",
+    "docs/public/"
+  ],
+  "exclude": [
+    "web/AGENTS.md",
+    "web/public/demo/"
+  ]
+}

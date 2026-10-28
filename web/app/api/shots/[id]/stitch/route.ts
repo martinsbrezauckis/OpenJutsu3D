@@ -1,0 +1,13 @@
+import { planSegments, stitch } from "@/lib/render";
+import { fail, ok } from "@/lib/http";
+export const runtime = "nodejs";
+export const maxDuration = 600;
+/** POST {n, fps} → crossfades the long shot's segment renders into render.mp4. */
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await ctx.params; const { n, fps } = await req.json().catch(() => ({}));
+    if (!Number.isInteger(n) || n <= 361 || n > 60 * 48 + 1 || ![24, 48].includes(fps)) return fail(new Error("bad stitch request"), 400);
+    await stitch(id, planSegments(n), fps);
+    return ok({ video: `/api/shots/${id}/file/render.mp4` });
+  } catch (e) { return fail(e, 500); }
+}

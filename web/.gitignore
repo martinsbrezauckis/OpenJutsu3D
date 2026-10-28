@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.env.local
+public/scenekit/
+data/
+next-env.d.ts
+AGENTS.md
+tsconfig.tsbuildinfo
+public/demo/*.png
+public/demo/*.mp4
+.cost-test/

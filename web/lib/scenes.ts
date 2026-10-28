@@ -1,0 +1,35 @@
+/**
+ * scenes.ts — "My scenes": saved sets on this machine (DATA_DIR/scenes/<id>/scene.json + thumb.jpg). A scene keeps
+ * everything needed to reopen and keep working: the prompt, the director's brief, the scene code (= the set), the
+ * version history (every build/change step, for undo and restore) and the chat. Server only.
+ */
+import { mkdir, readdir, readFile, writeFile, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { DATA_DIR } from "./render";
+
+export type Version = { code: string; note: string; at: string };
+export type SavedScene = { id: string; title: string; prompt: string; brief: unknown; versions: Version[]; head: number;
+  chat: unknown[]; takes: unknown[]; aspect?: Aspect; spend?: { credits: number; usd: number; unreported: number }; updated: string };
+export type Aspect = "16:9" | "9:16" | "1:1";
+const dir = (id: string) => { if (!/^[a-z0-9-]{8,64}$/.test(id)) throw new Error("bad scene id"); return join(DATA_DIR, "scenes", id); };
+
+export async function saveScene(s: Omit<SavedScene, "id" | "updated"> & { id?: string }, thumb?: Uint8Array): Promise<string> {
+  const id = s.id && /^[a-z0-9-]{8,64}$/.test(s.id) ? s.id : randomUUID();
+  await mkdir(dir(id), { recursive: true });
+  const rec: SavedScene = { ...s, id, updated: new Date().toISOString() };
+  await writeFile(join(dir(id), "scene.json"), JSON.stringify(rec));
+  if (thumb?.length) await writeFile(join(dir(id), "thumb.jpg"), thumb);
+  return id;
+}
+export async function loadScene(id: string): Promise<SavedScene> { return JSON.parse(await readFile(join(dir(id), "scene.json"), "utf8")); }
+export async function listScenes(): Promise<{ id: string; title: string; updated: string; objects?: number }[]> {
+  const root = join(DATA_DIR, "scenes");
+  const ids = await readdir(root).catch(() => [] as string[]);
+  const out = [];
+  for (const id of ids) {
+    try { const s = await loadScene(id); out.push({ id, title: s.title, updated: s.updated }); } catch { /* skip broken */ }
+  }
+  return out.sort((a, b) => b.updated.localeCompare(a.updated));
+}
+export async function thumbPath(id: string) { const p = join(dir(id), "thumb.jpg"); await stat(p); return p; }
