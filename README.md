@@ -33,18 +33,33 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
 
 - Prompt or reference picture → planned, live-built 3D set; concept picture first (optional).
 - Chat modes: Auto, Ask first, Don't ask, Chat only (answers about the set without changing it).
-- 33 camera moves, chained moves, timeline with playhead and real-time preview, shots up to 60 s (longer than 15 s
-  renders in overlapping parts that are crossfaded).
-- Frame formats 16:9, 9:16 and 1:1 (rendered natively by LTX).
-- Hands-on editing in the viewport: select (click or object list), move / rotate / scale gizmo, duplicate, delete, add
-  shapes, point / spot / sun lights and a camera at the current view.
+- 33 camera moves plus your own camera path: scrub the timeline to a moment, frame the view and add a keyframe there
+  (the camera passes through it at that time); chained moves, real-time preview, shots from 1 s up to 60 s (longer
+  than 15 s renders in overlapping parts that are crossfaded).
+- The shot from your words: a prompt or chat line such as "8 seconds, slow 360-degree orbit" or "dolly in for 5 s,
+  then crane up" sets the shot; "film it" renders it.
+- Frame formats 16:9, 9:16, 1:1, 4:3, 3:4 and 21:9 (2.35:1), all rendered natively by LTX.
+- People: animated actors (walk a path — also up stairs and slopes —, stand, talk, sit, jog, dance …) that the
+  builder stages from your words or that you add by hand; every frame of a shot shows the same pose, so the render
+  follows them exactly.
+- Your own characters: import a rigged character as .glb or .fbx (e.g. downloaded from Mixamo); it plays its own
+  motion, and a motion file imported with a person selected gives that person the motion (motions from one Mixamo
+  character fit the others). We ship no Mixamo files — bring your own.
+- Hands-on editing in the viewport: select (click or object list), move / rotate / scale gizmo for objects, lights and
+  cameras, duplicate, delete, add a person, shapes, point / spot / sun lights and a camera at the current view; Esc
+  returns to orbit. Lights and cameras show as icons in the view; a selected light has colour, brightness and on/off.
 - Asset library with model packs: a small built-in Samples pack (Poly Haven, CC0); add more yourself — Poly Haven's
   library in one click, a pack from a link (.glb / .zip) or a folder on your computer, or single GLB files. Each pack
   keeps its licence and credit and can be kept out of the builder. Models are placed where you look, at real size; the
   builder also places matching models by itself.
 - Scene properties: exposure, light strength, background colour.
-- Undo / redo and full version history; every scene is saved in **My scenes**.
-- Takes with Final / Clay / Side-by-side view; downloads: video, still, GLB with materials and textures.
+- Undo / redo and full version history (editing an older version restores it as the newest — nothing is lost);
+  every scene is saved in **My scenes**; Share saves a scene file that anyone can open in Open 3D Jutsu.
+- Self-repair: builder code that fails to run is sent back once with the exact error; anything still missing is said
+  in the chat.
+- Takes with Final / Clay / Side-by-side view; downloads: video, still, GLB with materials and textures. A render
+  that stops after its frames were made (e.g. the render server went away) continues from them when you press
+  Render shot again.
 - Cost shown per step and per scene (Router credits as priced per call), with an estimate from your recent runs.
 - Automation API: every UI action can be driven from a script, with a screenshot after each step (`bench/debug_api.py`).
 
@@ -104,6 +119,7 @@ Start it with `python3 bench/debug_api.py`; the full action list and examples ar
 
 ## Licence
 
-Code: MIT (see `LICENSE`). Bundled: three.js (MIT), Droid Sans Bold font (Apache-2.0, `spike/scenekit/assets/fonts`).
+Code: MIT (see `LICENSE`). Bundled: three.js (MIT), Droid Sans Bold font (Apache-2.0, `spike/scenekit/assets/fonts`),
+the animated mannequin from Quaternius' Universal Animation Library (CC0, `spike/scenekit/assets/characters`).
 Bundled: 16 sample models from Poly Haven (CC0, `web/packs/samples`). Downloaded on setup: Poly Haven textures (CC0).
 Model packs you add keep their own licences; the app shows each pack's credit. Models (LTX-2.5, Router models) are used under their providers' terms.

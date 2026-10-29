@@ -41,11 +41,12 @@ export async function builderCandidates(step: string, prompt: string, max = 24) 
 
 // ---- imported models (uploads): DATA_DIR/assets/<sha16>.glb + .json {name, height} ----
 const UP = () => join(DATA_DIR, "assets");
-export async function saveUpload(bytes: Uint8Array, name: string, height?: number): Promise<string> {
+export type UploadKind = "model" | "character" | "motion";
+export async function saveUpload(bytes: Uint8Array, name: string, height?: number, kind: UploadKind = "model"): Promise<string> {
   const id = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
   await mkdir(UP(), { recursive: true });
   await writeFile(join(UP(), `${id}.glb`), bytes);
-  await writeFile(join(UP(), `${id}.json`), JSON.stringify({ name: name.slice(0, 80), height: height ?? null, at: new Date().toISOString() }));
+  await writeFile(join(UP(), `${id}.json`), JSON.stringify({ name: name.slice(0, 80), height: height ?? null, kind, at: new Date().toISOString() }));
   return id;
 }
 export const uploadFile = (id: string) => { if (!/^[0-9a-f]{16}$/.test(id)) throw new Error("not found"); return join(UP(), `${id}.glb`); };

@@ -18,6 +18,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 const DEG = Math.PI / 180;
 const PREFIXES = ['ENV', 'PRP', 'MACH', 'CHAR', 'LGT', 'CAM'];
@@ -140,6 +141,36 @@ class Thing {
   commit() { return this.kit._commitThing(this); }
 }
 
+// Mannequin motions (kit.actor action → clip of the CC0 character) and their natural travel speeds (m/s).
+const CLIPS = { idle: 'Idle_Loop', walk: 'Walk_Loop', walk_formal: 'Walk_Formal_Loop', jog: 'Jog_Fwd_Loop', sprint: 'Sprint_Loop',
+  talk: 'Idle_Talking_Loop', sit: 'Sitting_Idle_Loop', sit_talk: 'Sitting_Talking_Loop', dance: 'Dance_Loop', crouch: 'Crouch_Idle_Loop',
+  crouch_walk: 'Crouch_Fwd_Loop', push: 'Push_Loop', torch: 'Idle_Torch_Loop', kneel_fix: 'Fixing_Kneeling', swim: 'Swim_Fwd_Loop' };
+const SPEED = { walk: 1.3, walk_formal: 1.2, jog: 3, sprint: 5.5, crouch_walk: 0.8, push: 0.8, swim: 1 };
+// ---- animated imports (Mixamo and other rigged files) ----
+/** Clips that actually move: FBX files carry an empty "Take 001" and a one-frame T-pose clip next to the motion. */
+const moving = (clips = []) => clips.filter((c) => c.tracks.length && c.duration >= 0.1);
+/** Bone name without the rig prefix: Mixamo characters differ ("mixamorig:Hips", "mixamorig1:Hips"; GLTFLoader drops ':'). */
+const boneKey = (n) => String(n).replace(/^mixamorig\d*[:_]?/i, '').toLowerCase();
+/**
+ * A motion clip from another file (same kind of skeleton) made to drive `target`: tracks renamed to the target's bone
+ * names by their prefix-free key, tracks of bones the target lacks dropped, and the root (hips) position scaled by the
+ * ratio of the two skeletons' rest hip heights (files come in different units and body sizes: 175 vs 378 units).
+ */
+function retarget(clip, from, target) {
+  const bones = new Map(); target.traverse((o) => { if (o.isBone) bones.set(boneKey(o.name), o); });
+  const restY = (root) => { let y = null; root.traverse((o) => { if (y === null && /hips$/i.test(o.name)) y = Math.abs(o.position.y); }); return y; };
+  const rFrom = restY(from), rTo = restY(target), k = rFrom && rTo ? rTo / rFrom : 1;
+  const tracks = [];
+  for (const tr of clip.tracks) {
+    const p = THREE.PropertyBinding.parseTrackName(tr.name), b = bones.get(boneKey(p.nodeName));
+    if (!b) continue;
+    const c = tr.clone(); c.name = `${b.name}.${p.propertyName}`;
+    if (p.propertyName === 'position') { if (!/hips$/i.test(b.name)) continue; c.values = c.values.map((v) => v * k); }
+    tracks.push(c);
+  }
+  return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+}
+
 export class SceneKit {
   /**
    * @param {THREE.Scene} scene  target scene (objects are added under a 'Scene' group)
@@ -155,6 +186,8 @@ export class SceneKit {
     this.font = opts.font || null;   // three Font for text(); preloaded by the viewer
     this.props = {};                 // scene properties from settings() (applied by the viewer in lit mode)
     this.models = opts.models || new Map();   // asset id -> {scene, height} preloaded by the viewer (model())
+    this.character = opts.character || null; // {scene, animations} rigged mannequin for actor() (CC0, assets/characters)
+    this.actors = [];                         // animated people: posed by animate(t) from the shot time
     // mesh -> its own material for imported models. NOT in userData: clone() JSON-copies userData and the GLB exporter
     // writes it into extras, both of which would mangle a material object.
     this._lit = new WeakMap();
@@ -182,8 +215,15 @@ export class SceneKit {
   /** Flat rectangle in the XY plane (facing +Z). */
   plane(w = 1, h = 1) { return new Part(new THREE.PlaneGeometry(w, h)); }
   /** Surface of revolution around Y from a profile of [radius, y] points (vases, columns, barrels). */
-  lathe(profile, segments = 32) {
-    return new Part(new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), segments));
+  lathe(profile, segments = 32, { open = false } = {}) {
+    // Closed by default: a profile that does not start/end on the axis left both ends as open tubes, and their inside
+    // rendered as black holes (tavern barrels 10-29). { open: true } keeps a cup or pipe open.
+    const pts = profile.map(([r, y]) => [r, y]);
+    if (!open && pts.length) {
+      if (pts[0][0] > 1e-4) pts.unshift([0, pts[0][1]]);
+      if (pts[pts.length - 1][0] > 1e-4) pts.push([0, pts[pts.length - 1][1]]);
+    }
+    return new Part(new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), segments));
   }
   /** 2D outline [[x, y], ...] in XY extruded along +Z by depth; optional holes (array of outlines). */
   extrude(outline, depth = 0.1, holes = []) {
@@ -219,16 +259,122 @@ export class SceneKit {
   object(name) { this._checkName(name, ['ENV', 'PRP', 'MACH', 'CHAR']); return new Thing(this, name); }
 
   /**
-   * Stand-in person (mannequin): pillar body + sphere head, ~height metres tall, facing -Z before rotYDeg.
-   * pose: 'stand' | 'sit'. Returns the committed group (already in the scene).
+   * Stand-in person (mannequin): jointed figure (head, neck, torso, pelvis, arms, legs, hands, feet), ~height metres
+   * tall, facing -Z before rotY degrees. pose: 'stand' | 'walk' | 'sit' (on a ≈0.45 m seat at x, z) | 'wave'.
+   * Proportions follow an adult figure so the video model reads it as a person, not a post. Returns the committed group.
    */
   person(name, { x = 0, z = 0, y = 0, rotY = 0, height = 1.75, pose = 'stand' } = {}) {
-    const t = this.object(name);
-    const head = height * 0.13, bodyH = pose === 'sit' ? height * 0.42 : height * 0.74;
-    t.add(this.box(height * 0.26, bodyH, height * 0.16).at(0, bodyH / 2, 0), 'person');
-    t.add(this.sphere(head, 20).at(0, bodyH + head * 1.1, 0), 'person');
-    if (pose === 'sit') t.add(this.box(height * 0.26, height * 0.1, height * 0.3).at(0, height * 0.05, -height * 0.12), 'person');
+    const H = height, t = this.object(name), V = (a, b, c) => new THREE.Vector3(a * H, b * H, c * H);
+    const hip = pose === 'sit' ? 0.3 : pose === 'walk' ? 0.52 : 0.53;   // sit: pelvis rests on a ≈0.45 m seat
+    // Joint positions in units of height: [left, right] for limbs (person's right = +X when facing -Z).
+    const J = {
+      stand: { knee: [[-0.06, 0.28, 0], [0.06, 0.28, 0]], ankle: [[-0.065, 0.04, 0], [0.065, 0.04, 0]],
+        elbow: [[-0.15, hip + 0.1, 0.01], [0.15, hip + 0.1, 0.01]], wrist: [[-0.16, hip - 0.06, -0.01], [0.16, hip - 0.06, -0.01]] },
+      walk: { knee: [[-0.06, 0.28, -0.07], [0.06, 0.27, 0.04]], ankle: [[-0.065, 0.04, -0.13], [0.065, 0.07, 0.12]],
+        elbow: [[-0.14, hip + 0.1, 0.06], [0.14, hip + 0.1, -0.06]], wrist: [[-0.15, hip - 0.05, 0.1], [0.15, hip - 0.04, -0.11]] },
+      sit: { knee: [[-0.06, 0.28, -0.24], [0.06, 0.28, -0.24]], ankle: [[-0.065, 0.04, -0.26], [0.065, 0.04, -0.26]],
+        elbow: [[-0.14, hip + 0.1, -0.04], [0.14, hip + 0.1, -0.04]], wrist: [[-0.12, hip + 0.03, -0.18], [0.12, hip + 0.03, -0.18]] },
+    };
+    const j = J[pose] || J.stand;
+    if (pose === 'wave') { j.elbow = [J.stand.elbow[0], [0.21, hip + 0.33, 0]]; j.wrist = [J.stand.wrist[0], [0.23, hip + 0.47, -0.02]]; }
+    const parts = [];
+    const ball = (c, r, s = [1, 1, 1]) => parts.push(this.sphere(r * H, 16).scale(s).at(c.x, c.y, c.z));
+    const limb = (a, b, rA, rB) => {   // tapered cylinder from joint a to joint b
+      const d = a.clone().sub(b), part = new Part(new THREE.CylinderGeometry(rA * H, rB * H, d.length(), 14));
+      part.m.compose(a.clone().add(b).multiplyScalar(0.5), new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()), new THREE.Vector3(1, 1, 1));
+      parts.push(part);
+    };
+    const pelvis = V(0, hip, 0), chest = V(0, hip + 0.2, 0), neck = V(0, hip + 0.29, 0), head = V(0, hip + 0.395, -0.005);
+    parts.push(this.cylinder(0.105 * H, 0.085 * H, chest.y - pelvis.y + 0.07 * H, 20).scale([1, 1, 0.55]).at(0, (pelvis.y + chest.y) / 2 + 0.035 * H, 0));
+    ball(pelvis, 0.09, [1, 0.6, 0.62]);
+    limb(neck.clone().add(V(0, 0.01, 0)), V(0, hip + 0.345, 0), 0.026, 0.028);
+    ball(head, 0.06, [0.88, 1.18, 1]);
+    for (const s of [0, 1]) {
+      const sx = s ? 1 : -1, hipJ = V(0.055 * sx, hip, 0), sh = V(0.12 * sx, hip + 0.27, 0);
+      const [knee, ankle, elbow, wrist] = ['knee', 'ankle', 'elbow', 'wrist'].map(k => V(...j[k][s]));
+      ball(sh, 0.036); limb(sh, elbow, 0.031, 0.026); ball(elbow, 0.026); limb(elbow, wrist, 0.025, 0.02);
+      ball(wrist.clone().add(wrist.clone().sub(elbow).setLength(0.03 * H)), 0.026, [0.8, 1.2, 0.8]);   // hand
+      ball(hipJ, 0.05); limb(hipJ, knee, 0.05, 0.036); ball(knee, 0.036); limb(knee, ankle, 0.034, 0.024);
+      parts.push(this.box(0.055 * H, 0.035 * H, 0.14 * H).at(ankle.x, 0.018 * H, ankle.z - 0.035 * H));   // foot
+    }
+    t.add(parts, 'person');
     return t.at(x, y, z, rotY).commit();
+  }
+
+  /**
+   * Animated person (rigged mannequin, CC0): plays a motion clip and can walk a path; posed from the SHOT time, so
+   * every frame of a shot (clay, lit, preview) shows the same pose. Facing: rotY degrees (0 = towards +Z).
+   *   kit.actor('CHAR_waiter_walking', { pos: [x, y, z], rotY: 90, action: 'walk', path: [[x, z], [x, z], …] })
+   * action: idle | walk | walk_formal | jog | sprint | talk | sit | sit_talk | dance | crouch | crouch_walk |
+   *         push | torch | kneel_fix | swim. With a path, the actor starts at path[0], walks it at a natural speed
+   *         (or `speed` m/s), faces the way it moves and stands idle at the end. height in metres (default 1.75).
+   */
+  actor(name, { pos = [0, 0, 0], rotY = 0, height = 1.75, action = 'idle', path = null, speed, offset = 0 } = {}) {
+    if (!this.character) throw new Error('actor: the character model is not loaded');
+    this._checkName(name, ['CHAR']);
+    const clipName = CLIPS[action] || action;
+    const anims = this.character.animations, find = (n) => anims.find(a => a.name === n) || anims.find(a => a.name.toLowerCase().includes(String(n).toLowerCase()));
+    const clip = find(clipName); if (!clip) throw new Error(`actor: no motion '${action}'`);
+    const m = cloneSkinned(this.character.scene);
+    const box = new THREE.Box3().setFromObject(m), size = box.getSize(new THREE.Vector3());
+    const s = height / Math.max(size.y, 1e-6); m.scale.multiplyScalar(s); m.position.y = -box.min.y * s;
+    const skin = new THREE.MeshStandardMaterial({ color: 0xc9c2b8, roughness: 0.7, name: 'MAT_person' });   // neutral, not the pack's orange
+    return this._stage(name, m, clip, path ? find('Idle_Loop') : null, { pos, rotY, path, speed: speed ?? SPEED[action] ?? 1.3, natural: SPEED[action], offset },
+      { skin, label: 'person', category: 'CHAR', actor: { pos, rotY, height, action, path, speed, offset } });
+  }
+  /**
+   * Shared staging of an animated figure (kit.actor and animated kit.model): plays `clip` posed from the SHOT time,
+   * optionally walks `path` ([x,z] or [x,y,z] points) at `speed` m/s and switches to `idleClip` at the end. A walking
+   * figure moves an INNER group along its path; the outer group stays free for hand edits (gizmo), which then
+   * move/turn the whole walk. natural = the clip's own travel speed (m/s): steps follow the travel speed (no foot
+   * sliding), the clip plays at speed / natural within 0.5–1.6×. skin = material for every mesh (null keeps the
+   * model's own materials). Returns the committed group.
+   */
+  _stage(name, m, clip, idleClip, { pos = [0, 0, 0], rotY = 0, path = null, speed = 1.3, natural, offset = 0 }, { skin = null, label = 'person', category = 'CHAR', ...data }) {
+    const walks = Array.isArray(path) && path.length >= 2;
+    const g = new THREE.Group(); g.name = name;
+    const body = walks ? new THREE.Group() : g; if (walks) g.add(body);
+    body.add(m); if (!walks) { g.rotation.y = rotY * DEG; g.position.set(...pos); }
+    let meshes = 0, tris = 0;
+    m.traverse(o => {
+      if (!o.isMesh) return;
+      meshes++; tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+      o.castShadow = o.receiveShadow = true; o.frustumCulled = false; o.userData.label = label;
+      if (skin) o.material = skin; this._lit.set(o, o.material); if (this.mode === 'clay') o.material = this.clay;
+    });
+    const mixer = new THREE.AnimationMixer(m), act = mixer.clipAction(clip); act.play();
+    const idle = walks && idleClip ? mixer.clipAction(idleClip) : null; if (idle) { idle.play(); idle.weight = 0; }
+    let pts = null, lens = null, total = 0;
+    if (walks) {
+      // [x,z] points walk at pos's height; [x,y,z] points set the height too (stairs, ramps, hills)
+      pts = path.map((p) => (p.length >= 3 ? new THREE.Vector3(p[0], p[1], p[2]) : new THREE.Vector3(p[0], pos[1], p[1]))); lens = [0];
+      for (let i = 1; i < pts.length; i++) lens.push(total += pts[i].distanceTo(pts[i - 1]));
+    }
+    const rate = walks && natural ? Math.min(1.6, Math.max(0.5, speed / natural)) : 1;
+    const a = { g: body, mixer, act, idle, pts, lens, total, speed, rate, offset };
+    g.userData = { kind: 'object', category, meshes, triangles: Math.round(tris), ...data };
+    this.actors.push(a); this._pose(a, 0);
+    this.root.add(g); this.stats.objects++; this.stats.meshes += meshes; this.stats.triangles += Math.round(tris);
+    this._markBase(g); this.onCommit(g, { name, kind: 'object' });
+    return g;
+  }
+  /** Pose every actor at time t seconds (deterministic: same t → same pose). The viewer calls it per shot frame. */
+  animate(t) { for (const a of this.actors) this._pose(a, t); }
+  _pose(a, t0) {
+    const t = Math.max(0, t0 + a.offset);
+    let moving = true;
+    if (a.pts) {
+      let d = a.speed * t; if (d >= a.total) { d = a.total; moving = false; }
+      let i = 1; while (i < a.lens.length - 1 && a.lens[i] < d) i++;
+      const p0 = a.pts[i - 1], p1 = a.pts[i], f = (d - a.lens[i - 1]) / Math.max(1e-6, a.lens[i] - a.lens[i - 1]);
+      a.g.position.lerpVectors(p0, p1, Math.min(1, f));
+      a.g.rotation.y = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+    }
+    const tEnd = a.pts ? a.total / a.speed : Infinity;
+    a.act.time = ((moving ? t : tEnd) * a.rate) % a.act.getClip().duration;
+    a.act.weight = moving || !a.idle ? 1 : 0;
+    if (a.idle) { a.idle.weight = moving ? 0 : 1; a.idle.time = moving ? 0 : (t - tEnd) % a.idle.getClip().duration; }
+    a.mixer.update(0);
   }
 
   /** Light. type: 'point' | 'spot' | 'directional' | 'area'. color as '#rrggbb' or 0xrrggbb; intensity in three units. */
@@ -247,7 +393,7 @@ export class SceneKit {
       if (type === 'directional') { const s = l.shadow.camera; s.left = s.bottom = -20; s.right = s.top = 20; s.far = 80; }
     }
     if (type === 'area') l.lookAt(...target);
-    l.userData = { kind: 'light', type };
+    l.userData = { kind: 'light', type, basePos: [...pos], baseTarget: [...target], pivot: [...pos] };   // base = as built (edit())
     this.root.add(l); this.stats.lights++;
     this.onCommit(l, { name, kind: 'light' });
     return l;
@@ -258,9 +404,22 @@ export class SceneKit {
     this._checkName(name, ['CAM']);
     const c = new THREE.PerspectiveCamera(fov, aspect, 0.1, 1000);
     c.name = name; c.position.set(...pos); c.lookAt(...lookAt);
-    c.userData = { kind: 'camera', lookAt };
+    c.userData = { kind: 'camera', lookAt, basePos: [...pos], baseLook: [...lookAt], pivot: [...pos] };   // base = as built (edit())
     this.root.add(c); this.cameras.push(c); this.stats.cameras++;
     this.onCommit(c, { name, kind: 'camera' });
+    return c;
+  }
+
+  /**
+   * Custom camera path (the app's "Add keyframe from this view"): keys = [[x, y, z, lookX, lookY, lookZ, fov], …] in
+   * shot order; the 'path' move flies a smooth curve through them. A later call for the same camera replaces its keys.
+   */
+  cameraPath(name, keys) {
+    const c = this.cameras.find(x => x.name === name);
+    if (!c) throw new Error(`cameraPath: no camera '${name}'`);
+    if (!Array.isArray(keys) || !keys.every(k => Array.isArray(k) && k.length >= 6 && k.every(Number.isFinite)))
+      throw new Error('cameraPath: keys must be [[x, y, z, lookX, lookY, lookZ, fov?], …]');
+    c.userData.keys = keys.map(k => [...k.slice(0, 6), k[6] ?? c.fov]);
     return c;
   }
 
@@ -285,8 +444,13 @@ export class SceneKit {
    * Must be called before the label is first used. Returns the label.
    */
   define(label, params = {}) {
-    if (this.materials.has(label)) throw new Error(`material '${label}' already used — define() it before first use`);
     this._defined.set(label, params);
+    const old = this.materials.get(label);
+    if (old) {   // already used (a chat change "make the plaster warmer"): rebuild it and swap it on every mesh using it
+      const m = this._buildMaterial(label); m.name = `MAT_${label}`; this.materials.set(label, m);
+      this.root.traverse(o => { if (o.isMesh && o.material === old) o.material = m; });
+      old.dispose();
+    }
     return this._material(label);
   }
 
@@ -457,14 +621,28 @@ export class SceneKit {
    * the model's own size when it has none — glTF units are metres);
    * rotY = turn about the vertical axis (degrees). It keeps its own materials (clay mode turns it grey like the rest).
    */
-  model(name, asset, { pos = [0, 0, 0], height, rotY = 0 } = {}) {
+  model(name, asset, { pos = [0, 0, 0], height, rotY = 0, action, motions = [], path = null, speed, offset = 0, as } = {}) {
     const src = this.models.get(asset);
     if (!src) throw new Error(`model: asset '${asset}' is not available`);
     this._checkName(name, ['ENV', 'PRP', 'MACH', 'CHAR']);
-    const m = src.scene.clone(true);
+    // Animated models (an imported character with its motion, e.g. from Mixamo): the model's own clips plus the clips
+    // of `motions` (other imported files of the same skeleton, named '<asset id>' or '<asset id>:<clip>').
+    let skinned = false; src.scene.traverse(o => { if (o.isSkinnedMesh) skinned = true; });
+    const m = skinned ? cloneSkinned(src.scene) : src.scene.clone(true);
+    const extra = motions.flatMap((id) => { const mm = this.models.get(id); if (!mm) throw new Error(`model: motion '${id}' is not available`);
+      return moving(mm.animations).map((c, i) => { const k = retarget(c, mm.scene, m); k.name = i ? `${id}:${c.name}` : id; return k; }); });
+    const anims = [...moving(src.animations), ...extra];
     const box = new THREE.Box3().setFromObject(m), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
-    const want = height ?? src.height, s = want ? want / Math.max(size.y, 1e-6) : 1;
+    // A character without a known height stands 1.75 m (Mixamo files come in centimetres: 180 "metres" tall).
+    const want = height ?? src.height ?? (name.startsWith('CHAR') ? 1.75 : undefined), s = want ? want / Math.max(size.y, 1e-6) : 1;
     m.scale.multiplyScalar(s); m.position.set(-c.x * s, -box.min.y * s, -c.z * s);   // base centre at the group origin
+    if (anims.length || skinned) {   // a rigged character without a motion yet holds its rest pose (kit.motion adds one)
+      const find = (n) => anims.find(x => x.name === n) || anims.find(x => x.name.toLowerCase().includes(String(n).toLowerCase()));
+      const clip = (action && find(action)) || anims[0] || new THREE.AnimationClip('rest', 1, []);
+      const idleClip = find('idle') || null;
+      return this._stage(name, m, clip, idleClip !== clip ? idleClip : null, { pos, rotY, path, speed: speed ?? 1.3, natural: /walk/i.test(clip.name + ' ' + (action || '')) ? 1.3 : undefined, offset },
+        { skin: null, label: 'model', category: name.split('_')[0], asset, actor: { pos, rotY, height, action: clip.name, as, path, speed, offset, motions } });
+    }
     const g = new THREE.Group(); g.name = name; g.add(m); g.rotation.y = rotY * DEG; g.position.set(...pos);
     let meshes = 0, tris = 0;
     m.traverse(o => {
@@ -477,6 +655,46 @@ export class SceneKit {
     this.root.add(g); this.stats.objects++; this.stats.meshes += meshes; this.stats.triangles += Math.round(tris);
     this._markBase(g); this.onCommit(g, { name, kind: 'object' });
     return g;
+  }
+  /**
+   * Change the motion of an animated figure IN PLACE (hand edits and its walk path stay):
+   *   kit.motion('CHAR_anna', 'up:3f…')   an imported motion file (e.g. a Mixamo "without skin" download)
+   *   kit.motion('CHAR_anna', 'wave')     a clip by name: the figure's own clips, or a kit.actor action for mannequins
+   * as = what the motion is, for the render prompt ('walk', 'talk', 'sit', 'wave', …): imported clips have no such name.
+   */
+  motion(name, motion, { as } = {}) {
+    const o = this.root.getObjectByName(name), A = o?.userData.actor;
+    const a = A && this.actors.find((x) => x.g === o || x.g.parent === o);
+    if (!a) throw new Error(`motion: '${name}' is not an animated figure`);
+    const root = a.mixer.getRoot(), own = o.userData.asset ? moving(this.models.get(o.userData.asset)?.animations) : this.character?.animations || [];
+    const find = (n) => own.find((c) => c.name === n) || own.find((c) => c.name.toLowerCase().includes(String(n).toLowerCase()));
+    let clip;
+    if (this.models.has(motion)) {
+      const mm = this.models.get(motion), c = moving(mm.animations)[0];
+      if (!c) throw new Error(`motion: '${motion}' has no motion in it`);
+      clip = o.userData.asset ? retarget(c, mm.scene, root) : c; clip.name = motion;
+    } else clip = find(o.userData.asset ? motion : CLIPS[motion] || motion);
+    if (!clip) throw new Error(`motion: no motion '${motion}' for '${name}'`);
+    a.act.stop(); a.act = a.mixer.clipAction(clip); a.act.play();
+    const nat = o.userData.asset ? (/walk/i.test(String(motion)) ? 1.3 : undefined) : SPEED[motion];
+    a.rate = a.pts && nat ? Math.min(1.6, Math.max(0.5, a.speed / nat)) : 1;
+    // remembered so a duplicate (kit.clone → kit.model) gets the same motion
+    const motions = this.models.has(motion) ? [...new Set([...(A.motions || []), motion])] : A.motions;
+    o.userData.actor = { ...A, motions, action: o.userData.asset ? clip.name : motion, as: as ?? (o.userData.asset ? undefined : motion) };
+    this._pose(a, 0);
+    return o;
+  }
+  /**
+   * Change a light IN PLACE (the app's light panel writes these lines; a later line for the same light replaces it):
+   *   kit.lightProps('LGT_key', { color: '#ffd09a', intensity: 4, on: true })
+   */
+  lightProps(name, { color, intensity, on } = {}) {
+    const l = this.root.getObjectByName(name);
+    if (!l?.isLight) throw new Error(`lightProps: no light '${name}'`);
+    if (color !== undefined) l.color.set(color);
+    if (intensity !== undefined) l.intensity = Math.max(0, Number(intensity) || 0);
+    if (on !== undefined) l.visible = !!on;
+    return l;
   }
   /** Remember an object's built placement and its world bounding-box centre (the pivot for edit()). */
   _markBase(g) {
@@ -492,6 +710,7 @@ export class SceneKit {
    */
   edit(name, { pos, rot = [0, 0, 0], scale = 1 } = {}) {
     const o = this.root.getObjectByName(name);
+    if (o && (o.userData.kind === 'light' || o.userData.kind === 'camera')) return this._editAim(o, pos, rot);
     if (!o || o.userData.kind !== 'object') throw new Error(`edit: no object '${name}'`);
     const c = new THREE.Vector3(...o.userData.pivot), p = pos ? new THREE.Vector3(...pos) : c.clone();
     const s = Array.isArray(scale) ? scale : [scale, scale, scale];
@@ -504,11 +723,34 @@ export class SceneKit {
     o.userData.edit = { pos: p.toArray(), rot: [...rot], scale };
     return o;
   }
+  /**
+   * Lights and cameras: pos = where it goes; rot (degrees, XYZ) turns its aim (a camera's look direction, a spot /
+   * sun light's target) about its own position. Moving keeps the aim direction (the look-at / target point moves along);
+   * scale has no meaning here. Measured from the light / camera as built, like objects.
+   */
+  _editAim(o, pos, rot) {
+    const u = o.userData, cam = u.kind === 'camera';
+    const p = new THREE.Vector3(...(pos ?? u.basePos));
+    const dir = new THREE.Vector3(...(cam ? u.baseLook : u.baseTarget)).sub(new THREE.Vector3(...u.basePos))
+      .applyEuler(new THREE.Euler(rot[0] * DEG, rot[1] * DEG, rot[2] * DEG));
+    const aim = p.clone().add(dir);
+    o.position.copy(p);
+    if (cam) { o.lookAt(aim); u.lookAt = aim.toArray(); }
+    else if (o.target) { o.target.position.copy(aim); o.target.updateMatrixWorld(); }
+    else if (o.isRectAreaLight) o.lookAt(aim);
+    u.edit = { pos: p.toArray(), rot: [...rot], scale: 1 };
+    return o;
+  }
   /** Duplicate a committed object under a new name, offset by `move` metres: kit.clone('PRP_barrel_01', 'PRP_barrel_02', { move: [1, 0, 0] }). */
   clone(src, dst, { move = [0, 0, 0] } = {}) {
     const o = this.root.getObjectByName(src);
     if (!o || o.userData.kind !== 'object') throw new Error(`clone: no object '${src}'`);
     this._checkName(dst, ['ENV', 'PRP', 'MACH', 'CHAR']);
+    if (o.userData.actor) {   // a rigged actor cannot be copied mesh by mesh (shared skeleton): build a new one, moved
+      const A = o.userData.actor, [dx, dy, dz] = move;
+      const opts = { ...A, pos: [A.pos[0] + dx, A.pos[1] + dy, A.pos[2] + dz], path: A.path && A.path.map((p) => (p.length >= 3 ? [p[0] + dx, p[1] + dy, p[2] + dz] : [p[0] + dx, p[1] + dz])) };
+      return o.userData.asset ? this.model(dst, o.userData.asset, opts) : this.actor(dst, opts);   // animated import or mannequin
+    }
     const g = o.clone(true); g.name = dst;
     const src2 = [], dst2 = []; o.traverse(x => src2.push(x)); g.traverse(x => dst2.push(x));
     src2.forEach((x, i) => { const m = this._lit.get(x); if (m) this._lit.set(dst2[i], m); });
@@ -527,6 +769,7 @@ export class SceneKit {
       if (o.userData.kind === 'object') { this.stats.objects--; this.stats.meshes -= o.userData.meshes || 0; this.stats.triangles -= o.userData.triangles || 0; }
       else if (o.userData.kind === 'light') { this.stats.lights--; if (o.target) this.root.remove(o.target); }
       o.removeFromParent();
+      this.actors = this.actors.filter(a => a.g !== o && a.g.parent !== o);
     }
     const ci = this.cameras.findIndex(c => c.name === name);
     if (ci >= 0) { this.cameras.splice(ci, 1); this.stats.cameras--; }
@@ -534,7 +777,9 @@ export class SceneKit {
   }
   _commitThing(thing) {
     const g = new THREE.Group(); g.name = thing.name; g.applyMatrix4(thing.place);
+    const parts = [];   // each part's box (object space) before the merge: the floating check (floaters.js) works per part
     for (const [label, geoms] of thing.byMat) {
+      for (const pg of geoms) { pg.computeBoundingBox(); const { min: a, max: z } = pg.boundingBox; parts.push([a.x, a.y, a.z, z.x, z.y, z.z].map((v) => +v.toFixed(3))); }
       const merged = mergeGeometries(geoms, false);
       if (!merged) throw new Error(`${thing.name}: could not merge parts for material ${label}`);
       const mesh = new THREE.Mesh(merged, this.materials.get(label));
@@ -542,11 +787,14 @@ export class SceneKit {
       mesh.userData.label = label;
       const preset = this.resolved.get(label)?.preset;
       if (preset && this.library?.[preset]?.surface) { mesh.userData.surface = true; mesh.castShadow = false; }
+      // see-through materials (window glass, water) let light through: a glass pane casting a full shadow kept every
+      // sun beam out of rooms (reading room, 10-29)
+      const mat = mesh.material; if (mat && (mat.transmission > 0.3 || (mat.transparent && mat.opacity < 0.6))) mesh.castShadow = false;
       if (this.mode === 'clay') mesh.material = this.clay;
       g.add(mesh); this.stats.meshes++; this.stats.triangles += merged.attributes.position.count / 3;
     }
     const meshes = g.children.length, tris = g.children.reduce((s, m) => s + m.geometry.attributes.position.count / 3, 0);
-    g.userData = { kind: 'object', category: thing.name.split('_')[0], meshes, triangles: tris };
+    g.userData = { kind: 'object', category: thing.name.split('_')[0], meshes, triangles: tris, parts };
     this.root.add(g); this.stats.objects++;
     this._markBase(g);
     this.onCommit(g, { name: thing.name, kind: 'object' });

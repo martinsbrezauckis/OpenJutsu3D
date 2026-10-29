@@ -57,6 +57,15 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .pill select { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .pill.on { border-color: var(--yellow); color: var(--yellow); }
 .pill .x { margin-left: 2px; opacity: .7; }
+.light-panel { position: absolute; left: 12px; top: 56px; z-index: 6; display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 12px;
+  background: rgb(27 21 32 / 92%); border: 1px solid var(--line); font-size: 13px; }
+.light-panel label { display: flex; align-items: center; gap: 6px; }
+.light-panel .swatch { position: relative; width: 28px; height: 22px; border-radius: 6px; border: 1px solid var(--line); display: inline-block; }
+.light-panel .swatch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.pill.keys { gap: 6px; }
+.pill.keys .ghost { padding: 2px 8px; font-size: 12px; }
+.track { cursor: pointer; touch-action: none; }
+.track .key { position: absolute; top: 21px; width: 8px; height: 8px; margin-left: -4px; transform: rotate(45deg); background: var(--yellow); border: 1px solid var(--ink); pointer-events: none; }
 
 /* ---------- home ---------- */
 .home { max-width: 1180px; margin: 0 auto; padding: 40px 24px 64px; display: grid; gap: 44px; }
@@ -72,6 +81,10 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .card { display: grid; gap: 0; padding: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); overflow: hidden; text-align: left; color: var(--text); }
+.card-wrap { position: relative; display: grid; }
+.card-acts { position: absolute; top: 8px; right: 8px; display: none; gap: 6px; }
+.card-wrap:hover .card-acts, .card-wrap:focus-within .card-acts { display: flex; }
+.card-acts .ghost { padding: 3px 9px; font-size: 12px; background: rgb(27 21 32 / 88%); border: 1px solid var(--line); border-radius: 8px; color: var(--text); }
 .card .pic { aspect-ratio: 16 / 9; background: var(--field); overflow: hidden; display: grid; place-items: center; }
 .card .pic img { width: 100%; height: 100%; object-fit: cover; transition: transform .2s ease; display: block; }
 .card:hover .pic img { transform: scale(1.03); }
@@ -143,7 +156,7 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .thumb { width: 96px; height: 54px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
 
 /* timeline: the camera move with a playhead (Higgsfield "Stage it") */
-.timeline { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 8px 12px; border-radius: 12px; background: var(--panel); }
+.timeline { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; padding: 8px 12px; border-radius: 12px; background: var(--panel); }
 .timeline .play { width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--field); display: grid; place-items: center; }
 .timeline .play svg { width: 14px; height: 14px; fill: var(--text); }
 .track { position: relative; height: 30px; }

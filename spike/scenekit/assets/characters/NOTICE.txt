@@ -1,0 +1,3 @@
+mannequin.glb — "Universal Animation Library (Standard)" by Quaternius (rigged mannequin + 46 animations).
+Licence: CC0 1.0 Universal (public domain dedication), https://creativecommons.org/publicdomain/zero/1.0/
+Source: https://quaternius.com/packs/universalanimationlibrary.html (Godot GLB from the Standard pack, unmodified).

@@ -141,9 +141,10 @@ export async function fetchResult(id: string, jobId: string, seg?: number): Prom
   const job = await client().jobs.get(jobId);
   // ComfyUI also reports the LoadVideo node's preview of our INPUT clay as an output (node 5001, same filename as the
   // upload) — taking "the first video" returned the clay instead of the render (E2E 10-28). Take the SaveVideo
-  // node's file: a video output that is not our uploaded clay.
+  // node's file: a video output that is not an uploaded clay. Not only THIS shot's clay: an identical clay (same set,
+  // camera and move) is de-duplicated to the earlier shot's file name, and that one came back as "the render" (10-29).
   const videos = job.outputs.filter((x) => /video|mp4/i.test(`${x.type} ${x.name}`));
-  const o = videos.find((x) => !(x.name.includes(id) && x.name.includes("_clay")));
+  const o = videos.find((x) => /^output/i.test(x.name)) ?? videos.find((x) => !/_clay(_s\d+)?\.mp4$/i.test(x.name));
   if (!o) throw new Error(`job has no render output (outputs: ${job.outputs.map((x) => x.name).join(", ")})`);
   const { url } = await o.getDownloadUrl();
   const res = await fetch(url); if (!res.ok) throw new Error(`download ${res.status}`);

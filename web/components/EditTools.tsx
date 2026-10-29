@@ -18,7 +18,8 @@ type PackRow = { id: string; name: string; kind: string; licence: string; credit
 type KnownPack = { id: string; name: string; licence: string; credit: string; size: string; how: string; url?: string };
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 28) || "model";
 const ADD: { id: string; label: string }[] = [{ id: "library", label: "Model from the library…" },
-  { id: "cube", label: "Cube" }, { id: "sphere", label: "Sphere" }, { id: "cylinder", label: "Cylinder" }, { id: "cone", label: "Cone" },
+  { id: "person", label: "Person" },
+  { id: "cube", label: "Cube" }, { id: "sphere", label: "Sphere" }, { id: "cylinder", label: "Cylinder" }, { id: "cone", label: "Cone" }, { id: "pyramid", label: "Pyramid" },
   { id: "point", label: "Point light" }, { id: "spot", label: "Spot light" }, { id: "sun", label: "Sun" }, { id: "camera", label: "Camera from this view" },
 ];
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -53,7 +54,8 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
     setLib((l) => ({ ...(l ?? { items: [], uploads: [], credit: null, on: true }), q, busy: true }));
     const r = await fetch(`/api/library?q=${encodeURIComponent(q)}&limit=36`).then((x) => x.json()).catch(() => null);
     setLib({ q, busy: false, on: !!r?.on, credit: r?.credit ?? null, items: r?.items ?? [],
-      uploads: (r?.uploads ?? []).map((u: { id: string; name: string; height: number | null }) => ({ id: u.id, name: u.name, category: "imported", height: u.height, mb: null, preview: null })) });
+      uploads: (r?.uploads ?? []).map((u: { id: string; name: string; height: number | null; kind?: string }) => ({ id: u.id, name: u.name,
+        category: u.kind === "motion" ? "motion" : u.kind === "character" ? "character" : "imported", height: u.height, mb: null, preview: null })) });
   }
   // Packs (user-chosen model sources): list, add (known / folder / link), switch on/off, remove.
   const [packsView, setPacksView] = useState<{ packs: PackRow[]; known: KnownPack[]; busy: string | null; err: string | null } | null>(null);
@@ -67,24 +69,64 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
     try { await f(); const j = await packsApi("GET"); setPacksView({ packs: j.packs, known: j.known, busy: null, err: null }); await searchLib(lib?.q ?? ""); }
     catch (e) { setPacksView((v) => v && { ...v, busy: null, err: (e as Error).message }); }
   }
-  async function placeModel(it: LibHit) {
+  async function placeModel(it: LibHit & { as?: string }) {
     if (!bridge) return;
     const v = await bridge.viewState(); const p = v.hit ?? v.target; const names = await taken();
-    const name = unique(`PRP_${slug(it.name)}`, names);
+    const person = it.category === "character";
+    const name = unique(`${person ? "CHAR" : "PRP"}_${slug(it.name)}`, names);
     const h = it.height ? `, height: ${r2(it.height)}` : "";   // no height = the model's own real-world size
-    if (await run(`kit.model('${name}', '${it.id}', { pos: ${v3(p)}${h}, rotY: 0 });`, `Add ${it.name}`)) {
+    // a person stands on the ground under the aim point and faces the view (like Add › Person)
+    const at = person && v.ground ? v.ground : p, face = person ? Math.round((Math.atan2(v.pos[0] - at[0], v.pos[2] - at[2]) * 180) / Math.PI) : 0;
+    if (await run(`kit.model('${name}', '${it.id}', { pos: ${v3(at)}${h}, rotY: ${face}${it.as ? `, as: '${it.as}'` : ""} });`, `Add ${it.name}`)) {
       setLib(null);   // show the placed model (the panel covers the view); Add › library opens it again
       await select(name); if (!mode) await setMode("translate");
     }
   }
-  async function importGlb(f: File) {
-    const form = new FormData(); form.set("file", f); form.set("name", f.name.replace(/\.glb$/i, ""));
-    const r = await fetch("/api/assets", { method: "POST", headers: { "X-O3J": "1" }, body: form }).then((x) => x.json()).catch(() => null);
-    if (!r?.id) { optsRef.current.onError(r?.error ?? "The import failed."); return; }
-    await placeModel({ id: r.id, name: f.name.replace(/\.glb$/i, ""), category: "imported", height: null, mb: null, preview: null });
-    await searchLib(lib?.q ?? "");
+  const [importing, setImporting] = useState<string | null>(null);
+  /** A motion card of the library: give the selected person that motion. */
+  async function giveMotion(u: LibHit) {
+    if (sel?.category !== "CHAR") { optsRef.current.onError("Select a person in the set first, then click the motion to give it to them."); return; }
+    const w = motionWord(u.name);
+    if (await run(`kit.motion('${sel.name}', '${u.id}'${w ? `, { as: '${w}' }` : ""});`, `${sel.name}: ${u.name}`)) setLib(null);
+  }
+  /** What a motion file is, from its name (Mixamo names: "Walking", "Sitting Idle", "Waving"…) — for the render prompt. */
+  const motionWord = (n: string) => (/walk/i.test(n) ? "walk" : /run|sprint/i.test(n) ? "run" : /jog/i.test(n) ? "jog" : /sit/i.test(n) ? (/talk/i.test(n) ? "sit_talk" : "sit")
+    : /talk|convers/i.test(n) ? "talk" : /wav/i.test(n) ? "wave" : /danc/i.test(n) ? "dance" : /jump/i.test(n) ? "jump" : /fight|punch|box/i.test(n) ? "fight" : /idle|stand/i.test(n) ? "idle" : null);
+  /** Import a .glb or .fbx (e.g. a Mixamo character or motion). FBX files are converted in the viewport first. */
+  async function importModel(f: File) {
+    if (!bridge) return;
+    // Mixamo file names carry export settings ("Remy_TPose_WithSkin", "Megan_Walking_InPlace_WithSkin"): drop them
+    const base = f.name.replace(/\.(glb|fbx)$/i, "").replace(/[_ -](T-?Pose|With(?:out)?[_ ]?Skin|In[_ ]?Place)(?=[_ -]|$)/gi, "") || "model";
+    let file: Blob = f, motionOnly = false, person = false;
+    try {
+      if (/\.fbx$/i.test(f.name)) {
+        setImporting(`Converting ${f.name}…`);
+        const c = await bridge.fbx(await f.arrayBuffer());
+        file = new Blob([c.glb], { type: "model/gltf-binary" }); motionOnly = c.meshes === 0 && c.clips.length > 0; person = c.meshes > 0 && c.bones > 0;
+        if (!c.meshes && !c.clips.length) throw new Error("That FBX file has neither a model nor a motion in it.");
+      }
+      const target = motionOnly && sel?.category === "CHAR" ? sel.name : null;
+      if (motionOnly && !target) throw new Error("That file is a motion without a body: select a person in the set first, then import it to give them this motion.");
+      setImporting(`Adding ${base}…`);
+      const form = new FormData(); form.set("file", file, `${base}.glb`); form.set("name", base); form.set("kind", motionOnly ? "motion" : person ? "character" : "model");
+      const r = await fetch("/api/assets", { method: "POST", headers: { "X-O3J": "1" }, body: form }).then((x) => x.json()).catch(() => null);
+      if (!r?.id) throw new Error(r?.error ?? "The import failed.");
+      const w = motionWord(base), as = w ? `, { as: '${w}' }` : "";
+      if (target) { if (await run(`kit.motion('${target}', '${r.id}'${as});`, `${target}: ${base}`)) setLib(null); }
+      else await placeModel({ id: r.id, name: base, category: person ? "character" : "imported", height: null, mb: null, preview: null, as: person && w ? w : undefined });
+    } catch (e) { optsRef.current.onError((e as Error).message); }
+    finally { setImporting(null); }
   }
 
+  // ---------- light panel ----------
+  const lightBase = useRef(new Map<string, number>());   // brightness slider spans 0–200 % of the light as first selected
+  const lightMax = (s: ObjInfo) => { if (!lightBase.current.has(s.name)) lightBase.current.set(s.name, Math.max(0.5, s.light?.intensity ?? 1)); return lightBase.current.get(s.name)! * 2; };
+  async function setLight(p: { color?: string; intensity?: number; on?: boolean }) {
+    if (!sel?.light) return;
+    const next = { ...sel.light, ...p }; setSel({ ...sel, light: next });
+    const r2x = (x: number) => Math.round(x * 1000) / 1000;
+    await run(`kit.lightProps('${sel.name}', { color: '${next.color}', intensity: ${r2x(next.intensity)}, on: ${next.on} });`, `Light ${sel.name}`, `light:${sel.name}`);
+  }
   async function run(block: string, note: string, coalesce?: string) {
     if (!bridge) return false;
     const r = await bridge.exec(block);
@@ -96,10 +138,16 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
   useEffect(() => {
     if (!bridge) return;
     bridge.onPicked = (info) => setSel(info);
+    bridge.onKey = (k) => { if (k === "Escape") escape(); };
     // The gizmo already moved the object live; record the final state (one version per object while you keep dragging it).
     bridge.onEdited = (e) => { setSel((s) => (s && s.name === e.name ? { ...s, ...e } : s));
       optsRef.current.record(editLine(e), `Edit ${e.name}`, { stats: null, cameras: [] }, `edit:${e.name}`); };
-    return () => { bridge.onPicked = undefined; bridge.onEdited = undefined; };
+    const onKey = (e: KeyboardEvent) => {   // Esc outside text fields
+      if (e.key !== "Escape" || (e.target as HTMLElement)?.closest?.("input, textarea, select")) return;
+      escape();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => { bridge.onPicked = undefined; bridge.onEdited = undefined; bridge.onKey = undefined; window.removeEventListener("keydown", onKey); };
   }, [bridge]);
   // A full reload (undo/redo, rebuild, chat change) replaces every object: drop the stale selection.
   useEffect(() => { setSel(null); setProps(parseSettings(optsRef.current.code)); }, [opts.reloads]);
@@ -115,6 +163,10 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
 
   const setMode = async (m: GizmoMode) => { setModeState(m); await bridge?.gizmo(m); };
   const select = async (name: string | null) => setSel((await bridge?.select(name)) ?? null);
+  /** Esc: drop the selection and go back to Orbit (Higgsfield: Esc leaves the current tool / camera). */
+  const escapeRef = useRef(async () => {});
+  escapeRef.current = async () => { await select(null); await setMode(null); setList(null); };
+  const escape = () => { void escapeRef.current(); };
   const unique = (base: string, taken: Set<string>) => { let i = 1; while (taken.has(`${base}_${i}`)) i++; return `${base}_${i}`; };
   async function taken() { const o = (await bridge?.objects()) ?? []; return new Set(o.map((x) => x.name)); }
 
@@ -135,9 +187,15 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
     const names = await taken(); let block = "", sel2: string | null = null;
     // Numbered names (CAM_view_1, LGT_point_2 …) from every name in the scene code: a reused name would REPLACE.
     const lightNames = new Set([...names, ...Array.from(optsRef.current.code.matchAll(/'((?:LGT|CAM)_[a-z0-9_]+)'/g), (m) => m[1])]);
-    const prim: Record<string, string> = { cube: "kit.box(1, 1, 1)", sphere: "kit.sphere(0.5, 32)", cylinder: "kit.cylinder(0.5, 0.5, 1, 32)", cone: "kit.cone(0.5, 1, 32)" };
+    const prim: Record<string, string> = { cube: "kit.box(1, 1, 1)", sphere: "kit.sphere(0.5, 32)", cylinder: "kit.cylinder(0.5, 0.5, 1, 32)", cone: "kit.cone(0.5, 1, 32)", pyramid: "kit.cone(0.7, 1, 4).rot(0, 45, 0)" };
     if (kind === "library") { setList(null); setScenePanel(false); await searchLib(""); return; }
     if (prim[kind]) { sel2 = unique(`PRP_${kind}`, names); block = `kit.object('${sel2}').add(${prim[kind]}.at(${r2(x)}, ${r2(y)}, ${r2(z)}), 'concrete').commit();`; }
+    else if (kind === "person") {   // stands on the surface in the view, facing the camera
+      const [hx, hy, hz] = v.ground ?? v.hit ?? [v.target[0], 0, v.target[2]];   // people stand on the ground, not on shelves
+      const face = Math.round(Math.atan2(v.pos[0] - hx, v.pos[2] - hz) * 180 / Math.PI);   // actors face +Z at rotY 0
+      sel2 = unique("CHAR_person", names);
+      block = `kit.actor('${sel2}', { pos: ${v3([hx, hy, hz])}, rotY: ${face}, action: 'idle' });`;
+    }
     else if (kind === "point") block = `kit.light('${unique("LGT_point", lightNames)}', { type: 'point', pos: ${v3([x, y + 2, z])}, color: '#ffe8c0', intensity: 12, distance: 20 });`;
     else if (kind === "spot") block = `kit.light('${unique("LGT_spot", lightNames)}', { type: 'spot', pos: ${v3(v.pos)}, target: ${v3(v.target)}, color: '#ffffff', intensity: 40, distance: 60, angleDeg: 30 });`;
     else if (kind === "sun") block = `kit.light('${unique("LGT_sun", lightNames)}', { type: 'directional', pos: ${v3([x - 40, y + 50, z + 30])}, target: ${v3(v.target)}, color: '#fff1d6', intensity: 2.5 });`;
@@ -167,9 +225,20 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
         <button className={`pill ${list ? "on" : ""}`} aria-pressed={!!list} onClick={toggleList}>Objects</button>
         <button className={`pill ${scenePanel ? "on" : ""}`} aria-pressed={scenePanel} onClick={() => setScenePanel(!scenePanel)}>Scene</button>
         {sel && <span className="sel-chip"><b>{sel.name}</b>
-          <button className="pill" onClick={duplicate}>Duplicate</button><button className="pill" onClick={remove}>Delete</button>
+          {/* Lights and cameras move and turn with the handles; only objects can be duplicated. */}
+          {!/^(LGT|CAM)_/.test(sel.name) && <button className="pill" onClick={duplicate}>Duplicate</button>}
+          <button className="pill" onClick={remove}>Delete</button>
           <button className="pill" aria-label="Clear selection" onClick={() => select(null)}>×</button></span>}
       </div>
+      {sel?.light && <div className="light-panel" role="group" aria-label="Light">
+        <label>Colour <span className="swatch" style={{ background: sel.light.color }}>
+          <input type="color" aria-label="Light colour" value={sel.light.color} onChange={(e) => setLight({ color: e.target.value })} /></span></label>
+        <label>Brightness <span>{Math.round((sel.light.intensity / lightMax(sel)) * 200)}%</span>
+          <input type="range" aria-label="Light brightness" min={0} max={lightMax(sel)} step={lightMax(sel) / 100} value={sel.light.intensity}
+            onChange={(e) => setLight({ intensity: Number(e.target.value) })} /></label>
+        <button className={`pill ${sel.light.on ? "on" : ""}`} aria-pressed={sel.light.on} onClick={() => setLight({ on: !sel.light!.on })}>{sel.light.on ? "On" : "Off"}</button>
+        <span className="note">{sel.light.type} light</span>
+      </div>}
       {scenePanel && <div className="scene-panel" role="group" aria-label="Scene properties">
         <label>Exposure <span>{props.exposure.toFixed(2)}×</span>
           <input type="range" min={0.3} max={2.5} step={0.05} value={props.exposure} onChange={(e) => changeProps({ ...props, exposure: Number(e.target.value) })} /></label>
@@ -187,14 +256,17 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
           <input type="search" placeholder="Search models, e.g. barrel, lantern, car" defaultValue={lib.q} autoFocus
             onKeyDown={(e) => { if (e.key === "Enter") searchLib((e.target as HTMLInputElement).value); }} />
           <button className={`pill ${packsView ? "on" : ""}`} onClick={() => (packsView ? setPacksView(null) : openPacks())}>Packs</button>
-          <label className="pill">Import GLB<input type="file" accept=".glb,model/gltf-binary" hidden
-            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) importGlb(f); }} /></label>
+          <label className="pill" title="Your own model or character: .glb, or .fbx as downloaded from Mixamo. A motion file (without skin) goes to the selected person.">Import GLB / FBX<input type="file" accept=".glb,.fbx,model/gltf-binary" hidden
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) importModel(f); }} /></label>
           <button className="pill" aria-label="Close the library" onClick={() => setLib(null)}>×</button>
         </div>
+        {importing && <p className="note">{importing}</p>}
         {packsView && <PacksPanel v={packsView} act={packAction} api={packsApi} />}
         {!packsView && !lib.on && <p className="note">No model pack is switched on. Open Packs to add one, or import your own GLB.</p>}
         {!packsView && <div className="lib-grid">
-          {lib.uploads.map((u) => <button key={u.id} onClick={() => placeModel(u)} title={`${u.name} (imported)`}><span className="ph">GLB</span><b>{u.name}</b></button>)}
+          {lib.uploads.map((u) => <button key={u.id} onClick={() => (u.category === "motion" ? giveMotion(u) : placeModel(u))}
+            title={u.category === "motion" ? `${u.name}: a motion — select a person, then click it` : `${u.name} (imported)`}>
+            <span className="ph">{u.category === "motion" ? "MOTION" : u.category === "character" ? "PERSON" : "GLB"}</span><b>{u.name}</b></button>)}
           {lib.items.map((it) => <button key={it.id} onClick={() => placeModel(it)} title={`${it.name}${it.height ? `, about ${it.height} m` : ""}${it.mb ? `, ${it.mb} MB` : ""}${it.pack ? ` (${it.pack})` : ""}`}>
             {it.preview ? <img src={it.preview} alt="" loading="lazy" /> : <span className="ph">GLB</span>}<b>{it.name}</b></button>)}
           {lib.busy && <p className="note">Searching…</p>}
@@ -203,14 +275,15 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
         {lib.credit && <p className="note credit">{lib.credit}</p>}
       </div>}
       {list && <div className="obj-list" role="listbox" aria-label="Objects in the set">
-        {list.map((o) => <button key={o.name} role="option" aria-selected={sel?.name === o.name} onClick={() => select(o.name)}>{o.name}</button>)}
+        {list.map((o) => <button key={o.name} role="option" aria-selected={sel?.name === o.name} onClick={() => select(o.name)}>
+          {o.category === "LGT" ? "Light: " : o.category === "CAM" ? "Camera: " : ""}{o.name}</button>)}
       </div>}
     </>
   );
   return { ui, mode, sel, props, lib: lib && { q: lib.q, n: lib.items.length, first: lib.items[0]?.name ?? null, on: lib.on },
     acts: { setMode, select, duplicate, remove, add, toggleList, editSelected, changeProps, searchLib, openPacks: async () => { await searchLib(""); await openPacks(); },
     placeResult: async (i = 0) => { const it = lib?.items[i]; if (!it) throw new Error("no library result"); await placeModel(it); },
-    scenePanel: (on: boolean) => setScenePanel(on) } };
+    scenePanel: (on: boolean) => setScenePanel(on), setLight: (p: { color?: string; intensity?: number; on?: boolean }) => setLight(p) } };
 }
 
 /** The Packs view inside the library panel: what is installed (licence, credit, on/off, builder use) and how to add more. */

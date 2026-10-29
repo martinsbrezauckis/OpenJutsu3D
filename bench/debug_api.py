@@ -6,7 +6,9 @@ is followed by a numbered screenshot, the app state and any console/page errors.
 Endpoints (127.0.0.1 only):
   POST /open   {url?, width?, height?}        open/reload the app (default http://127.0.0.1:3000/?debug=1, 1600×900)
   POST /act    {name, args?, wait?, settle?}  run window.__o3j.act[name](...args); then wait `wait` s (default 1.5),
-                                              or with settle=true until the app is not busy (max 3600 s); screenshot
+                                              or with settle=true until the app is not busy (max 3600 s; settle=<seconds> sets the cap — long shots); screenshot
+  POST /upload {path, wait?}                  give a file to the open Import input (library panel); path must lie under
+                                              bench/out (e.g. bench/out/mixamo/*.fbx); waits until the import is done
   GET  /state                                 window.__o3j.state()
   GET  /shot?name=x                           screenshot now
   GET  /log                                   action log (app) + console errors (browser)
@@ -81,6 +83,25 @@ class Session:
         errs, self.errors = self.errors, []
         return {"ok": True, "state": self.state(), "shot": shot, "errors": errs}
 
+    def key(self, key: str, where: str = "page", wait=1.0):
+        """A real key press: in the app page, or inside the 3D viewport (its sandboxed iframe has its own focus)."""
+        if not re.fullmatch(r"[A-Za-z0-9+]{1,20}", key or ""): raise ValueError("bad key")
+        if where == "viewport":
+            fr = next(f for f in self.page.frames if "studio.html" in f.url)
+            fr.locator("body").press(key)
+        else:
+            self.page.locator("body").press(key)
+        time.sleep(float(wait)); return self.reply(f"key-{key}")
+
+    def upload(self, path: str, wait=180.0):
+        # The Import input of the library panel (Add › library); then wait while the panel says Converting/Adding.
+        self.page.set_input_files('input[type=file][accept*=".fbx"]', path)
+        t0 = time.time(); time.sleep(1.0)
+        while time.time() - t0 < float(wait) and self.page.locator(".lib-panel .note", has_text=re.compile("Converting|Adding")).count():
+            time.sleep(1.0)
+        time.sleep(1.5)
+        return self.reply("upload")
+
     def act(self, name: str, args=None, wait=1.5, settle=False):
         if not re.fullmatch(r"[A-Za-z]{2,40}", name or ""): raise ValueError("bad action name")
         self.page.evaluate("async ([n, a]) => { const f = window.__o3j.act[n]; if (!f) throw new Error('no action ' + n); await f(...a) }", [name, args or []])
@@ -90,7 +111,8 @@ class Session:
             t0 = time.time()
             while not self.busy() and time.time() - t0 < 30: time.sleep(0.5)
             clear = 0
-            while clear < 2 and time.time() - t0 < 3600:
+            cap = float(settle) if not isinstance(settle, bool) else 3600.0
+            while clear < 2 and time.time() - t0 < cap:
                 time.sleep(2); clear = 0 if self.busy() else clear + 1
         else:
             time.sleep(float(wait))
@@ -105,7 +127,7 @@ def main():
     s = Session(a.gpu); s.open(a.url)
 
     token = secrets.token_urlsafe(24)
-    tok_file = ROOT / "bench" / "logs" / "debug_api.token"; tok_file.parent.mkdir(parents=True, exist_ok=True)
+    tok_file = ROOT / "bench" / "logs" / ("debug_api.token" if a.port == 3999 else f"debug_api.{a.port}.token")   # one per server; tok_file.parent.mkdir(parents=True, exist_ok=True)
     tok_file.write_text(token); os.chmod(tok_file, 0o600)
     app_origin = "{0.scheme}://{0.netloc}".format(urlparse(a.url))
 
@@ -139,7 +161,12 @@ def main():
                     url = body.get("url", a.url)
                     if "{0.scheme}://{0.netloc}".format(urlparse(url)) != app_origin: return self.send(400, {"ok": False, "error": "only the app's origin"})
                     return self.send(200, s.open(url, body.get("width", 1600), body.get("height", 900)))
+                if self.path == "/key": return self.send(200, s.key(body.get("key"), body.get("where", "page"), body.get("wait", 1.0)))
                 if self.path == "/act": return self.send(200, s.act(body.get("name"), body.get("args"), body.get("wait", 1.5), body.get("settle", False)))
+                if self.path == "/upload":
+                    p, out = pathlib.Path(str(body.get("path", ""))).resolve(), (ROOT / "bench" / "out").resolve()
+                    if out not in p.parents or not p.is_file(): return self.send(400, {"ok": False, "error": "path must be a file under bench/out"})
+                    return self.send(200, s.upload(str(p), body.get("wait", 180)))
                 self.send(404, {"ok": False, "error": "unknown path"})
             except Exception as e:
                 try: shot = s.shot("error")

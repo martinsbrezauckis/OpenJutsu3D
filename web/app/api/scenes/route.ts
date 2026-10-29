@@ -11,7 +11,7 @@ export async function POST(req: Request) {
     const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(b.thumb || ""));
     const id = await saveScene({ id: b.id, title: b.title.slice(0, 120), prompt: String(b.prompt || ""), brief: b.brief ?? null,
       versions: b.versions, head: Number(b.head) || 0, chat: Array.isArray(b.chat) ? b.chat : [], takes: Array.isArray(b.takes) ? b.takes : [],
-      aspect: ["16:9", "9:16", "1:1"].includes(b.aspect) ? b.aspect : "16:9",
+      aspect: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].includes(b.aspect) ? b.aspect : "16:9",
       spend: b.spend && typeof b.spend === "object" ? { credits: Number(b.spend.credits) || 0, usd: Number(b.spend.usd) || 0, unreported: Number(b.spend.unreported) || 0 } : undefined },
       m ? new Uint8Array(Buffer.from(m[1], "base64")) : undefined);
     return ok({ id });

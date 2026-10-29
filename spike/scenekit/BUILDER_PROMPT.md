@@ -28,7 +28,7 @@ move-then-rotate and rotate-then-move give the same result):
 - `kit.sphere(r, segments=24)`
 - `kit.torus(r, tube, arcDeg=360, segments=32)` — ring lies in the XY plane
 - `kit.plane(w, h)` — XY plane facing +Z
-- `kit.lathe([[radius, y], ...], segments=32)` — revolve a profile around Y (barrels, columns, vases)
+- `kit.lathe([[radius, y], ...], segments=32, {open=false})` — revolve a profile around Y (barrels, columns, vases); ends are closed automatically, `{open: true}` for an open cup or pipe
 - `kit.extrude([[x, y], ...], depth, holes=[])` — 2D outline in XY extruded along +Z (arches, gears, signs)
 - `kit.tube([[x,y,z], ...], radius, segments=64, closed=false)` — smooth pipe along points
 - `kit.text('RAMEN', {size: 0.3, depth: 0.03, align: 'center'})` — real lettering in XY facing +Z, baseline y = 0
@@ -54,7 +54,8 @@ Objects:
   `.at(x, y, z, rotYDeg)` to place the whole object → `.commit()`.
   PREFIX: `ENV` architecture/terrain, `PRP` props, `MACH` machines/large devices, `CHAR` people/creatures.
   Names: `PREFIX_snake_case`, unique. Material labels: see Materials above.
-- `kit.person('CHAR_name', {x, z, y=0, rotY=0, height=1.75, pose:'stand'|'sit'})` — stand-in mannequin.
+- `kit.actor('CHAR_name', {pos:[x,y,z], rotY=0, height=1.75, action:'idle', path:[[x,z],…] or [[x,y,z],…], speed, offset=0})` — an ANIMATED person (rigged mannequin) for anyone the brief mentions. action: idle, walk, walk_formal, jog, sprint, talk, sit, sit_talk, dance, crouch, crouch_walk, push, torch, kneel_fix. With `path` the person walks it (faces the way they move, stands idle at the end; use [x,y,z] points with the ground height of each point when the way goes up stairs, a ramp or a hill — one point at the foot and one at the top of each straight flight); give walkers a path that stays on walkable ground and clear of props for the whole shot; people who pass through a camera's view CROSS it sideways (path roughly perpendicular to that camera's look direction, usually beyond the main subject) — never walk along a camera's line of sight and never come within 3 m of a camera or the path its moves take (a dolly-in travels about 45% of the way to its look-at point); `offset` (s) staggers several walkers. sit = seat height ≈ 0.45 m: place on a chair/bench of that height. Name says what they do (CHAR_waiter_walking, CHAR_couple_talking_left).
+- `kit.person('CHAR_name', {x, z, y=0, rotY=0, height=1.75, pose:'stand'|'walk'|'sit'|'wave'})` — static jointed mannequin (only when a frozen figure is wanted) (people read as people in the render; sit = on a ≈0.45 m seat centred at x, z).
 - `kit.glow('label', '#rrggbb', strength)` — make a material label emissive (flames, lamps, screens). Returns the label.
 - `kit.tint('label', '#rrggbb')` — optional viewport colour hint.
 

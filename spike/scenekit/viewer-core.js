@@ -8,7 +8,7 @@
  * Every behaviour below was tuned on 10-18 against real renders (comments keep the reason next to each rule).
  *
  * API: createViewer({ container?, width, height, base }) → viewer
- *   viewer.load(code) → result {ok, error, skipped, stats, meta, cameras, order, materials, sky, ms}
+ *   viewer.load(code) → result {ok, error, skipped, floating, stats, meta, cameras, order, materials, sky, ms}
  *   viewer.setMode('lit'|'clay'), viewer.shot(camName|'overview'), viewer.frame(cam, move, i, n, amount, fps) → state
  *   viewer.visible(cam, move, i, n) → [{name, category, labels, cover}], viewer.exportGLB('lit'|'clay') → base64,
  *   viewer.setSize(w, h), viewer.texturesSettled() → Promise, viewer.MOVES, viewer.canvas, viewer.renderer
@@ -16,6 +16,7 @@
  * Depends: three@0.186.1 (import map), kit.js, camera-moves.js, materials.json, assets/textures/manifest.json.
  */
 import * as THREE from 'three';
+import { floaters } from './floaters.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -31,6 +32,34 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const MAX_SKIPS = 6, HEADER = 4;  // stack line of code line 0: 'function anonymous(kit' + ') {' + '"use strict"' precede it
+
+/**
+ * Convert an FBX file (Mixamo's download format) to GLB bytes with its animations, so an imported character goes
+ * through the same library/GLB route as every other model. Embedded textures are waited for (FBXLoader decodes them
+ * asynchronously) and capped at 2048 px. A "without skin" motion file converts to a skeleton + clip (no meshes):
+ * use it as a motion of a character (kit.model {motions}). Returns { glb, meshes, bones, dropped (textures), clips: [{name, seconds}] }.
+ */
+export async function convertFBX(buf) {
+  const [{ FBXLoader }, { GLTFExporter: Exporter }] = await Promise.all([
+    import('three/addons/loaders/FBXLoader.js'), import('three/addons/exporters/GLTFExporter.js')]);
+  const obj = new FBXLoader().parse(buf, '');
+  const slots = []; let meshes = 0, bones = 0;
+  obj.traverse((o) => {
+    if (o.isBone) bones++;
+    if (!o.isMesh) return; meshes++;
+    for (const m of [].concat(o.material)) for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'specularMap', 'bumpMap'])
+      if (m?.[k]) slots.push([m, k]);
+  });
+  // TextureLoader sets texture.image only once the (embedded, blob-URL) image has loaded: wait for it; a texture that
+  // never decodes (a missing external file) is dropped rather than failing the whole import.
+  const ok = (im) => im && (im.width > 0 || im.naturalWidth > 0 || im.data);
+  const loaded = (tx) => new Promise((res) => { const t0 = Date.now(), poll = () => (ok(tx.image) || Date.now() - t0 > 20000 ? res() : setTimeout(poll, 50)); poll(); });
+  await Promise.all([...new Set(slots.map(([m, k]) => m[k]))].map(loaded));
+  let dropped = 0; for (const [m, k] of slots) if (!ok(m[k].image)) { m[k] = null; m.needsUpdate = true; dropped++; }
+  obj.animations.forEach((c, i) => { if (!c.name || c.name === 'mixamo.com') c.name = i ? `motion_${i}` : 'motion'; });
+  const glb = await new Exporter().parseAsync(obj, { binary: true, animations: obj.animations, maxTextureSize: 2048, onlyVisible: false });
+  return { glb, meshes, bones, dropped, clips: obj.animations.map((c) => ({ name: c.name, seconds: Number(c.duration.toFixed(2)) })) };
+}
 
 export async function createViewer({ container = document.body, width = 1280, height = 720, base = '', exposure = 1.0, fogScale = 1 } = {}) {
   const url = (p) => new URL(p, new URL(base || '.', location.href)).href;
@@ -48,18 +77,56 @@ export async function createViewer({ container = document.body, width = 1280, he
 
   const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0d0f12);
   const uiLayer = new THREE.Group(); uiLayer.name = 'UI'; scene.add(uiLayer);
+  // Light and camera icons in the live view (never in shots or exports: uiLayer only draws in the orbit view). A click
+  // on an icon selects that light/camera (Higgsfield shows them in its viewport; ours were only in the Objects list).
+  // Drawn in their own pass AFTER the effects (renderWith): inside the scene the wet-floor reflections (SSR) mirrored them.
+  const markerScene = new THREE.Scene(), markers = new THREE.Group(); markers.name = 'markers'; markerScene.add(markers);
+  const iconTex = new Map();
+  function icon(kind, color) {
+    const key = kind + color; if (iconTex.has(key)) return iconTex.get(key);
+    const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+    g.fillStyle = 'rgba(20,22,26,0.82)'; g.beginPath(); g.arc(32, 32, 30, 0, Math.PI * 2); g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#f2ff59'; g.stroke();
+    if (kind === 'light') {
+      g.fillStyle = color; g.beginPath(); g.arc(32, 30, 11, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = color; g.lineWidth = 3;
+      for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; g.beginPath(); g.moveTo(32 + Math.cos(a) * 15, 30 + Math.sin(a) * 15); g.lineTo(32 + Math.cos(a) * 21, 30 + Math.sin(a) * 21); g.stroke(); }
+    } else {
+      g.fillStyle = '#ffffff'; g.fillRect(14, 22, 26, 20); g.beginPath(); g.moveTo(40, 32); g.lineTo(52, 23); g.lineTo(52, 41); g.closePath(); g.fill();
+    }
+    const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace; iconTex.set(key, tx); return tx;
+  }
+  function refreshMarkers() {
+    for (const m of [...markers.children]) { markers.remove(m); m.material?.dispose?.(); m.geometry?.dispose?.(); }
+    if (!kit) return;
+    kit.root.traverse((o) => {
+      const kind = o.userData?.kind; if (kind !== 'light' && kind !== 'camera') return;
+      const col = kind === 'light' && o.color ? '#' + o.color.getHexString() : '#ffffff';
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: icon(kind, col), depthTest: false, transparent: true, sizeAttenuation: false }));
+      s.scale.setScalar(0.045); s.renderOrder = 999; s.userData.pick = o.name; markers.add(s);
+    });
+    placeMarkers();
+  }
+  const _mp = new THREE.Vector3();
+  function placeMarkers() {
+    for (const m of markers.children) { const o = kit?.root.getObjectByName(m.userData.pick); if (o) m.position.copy(o.getWorldPosition(_mp)); }
+  }
   // Ambient lift so unlit corners aren't pure black in lit mode; stronger studio fill in clay mode.
   const ambient = new THREE.HemisphereLight(0xbfd4ff, 0x2a2420, 0.25); ambient.name = 'viewport_ambient'; scene.add(ambient);
   const headlight = new THREE.DirectionalLight(0xffffff, 1.2); headlight.name = 'viewport_headlight'; scene.add(headlight, headlight.target);
 
   const fetchJSON = async (u) => { const r = await fetch(url(u), { credentials: 'omit' }); if (!r.ok) throw new Error(`${u}: ${r.status}`); return r.json(); };
-  const [library, manifest, fontJSON] = await Promise.all([fetchJSON('materials.json'), fetchJSON('assets/textures/manifest.json').catch(() => ({})),
-    fetchJSON('assets/fonts/droid_sans_bold.typeface.json').catch(() => null)]);
+  // The rigged mannequin for kit.actor() (CC0 Quaternius, assets/characters/NOTICE.txt): parsed once per viewer.
+  const loadCharacter = () => fetch(url('assets/characters/mannequin.glb'), { credentials: 'omit' })
+    .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status))))).then(b => new GLTFLoader().parseAsync(b, ''))
+    .then(g => ({ scene: g.scene, animations: g.animations })).catch(() => null);
+  const [library, manifest, fontJSON, character] = await Promise.all([fetchJSON('materials.json'), fetchJSON('assets/textures/manifest.json').catch(() => ({})),
+    fetchJSON('assets/fonts/droid_sans_bold.typeface.json').catch(() => null), loadCharacter()]);
   const font = fontJSON ? new FontLoader().parse(fontJSON) : null;   // kit.text() (signs); Apache-2.0, assets/fonts/NOTICE.txt
   const manager = new THREE.LoadingManager();
   let texturesPending = 0, settleWaiters = [];
   manager.onStart = () => { texturesPending++; };
-  manager.onLoad = () => { texturesPending = 0; settleWaiters.splice(0).forEach(f => f()); };
+  manager.onLoad = () => { texturesPending = 0; settleWaiters.splice(0).forEach(f => f()); needsRender = true; };
   manager.onError = () => {};
   const texLoader = new THREE.TextureLoader(manager);
   const texBase = url('assets/textures/');
@@ -90,15 +157,17 @@ export async function createViewer({ container = document.body, width = 1280, he
   let kit = null, log = [], box = new THREE.Box3(), setDiag = 10, fog = new THREE.FogExp2(0x15171a, 0.09);
   let surfaces = [], solids = [], skyMesh = null, skyEnv = null, skyInfo = { exterior: false, tod: 'day', vacuum: false };
   let mode = 'lit', result = null;
+  let needsRender = true, lastRender = 0;   // live view redraws on change (see interactive())
+  let parkedT = null;   // timeline playhead parked at a time (seek): people hold that pose in the live view
   const plans = new Map();
   // Library / imported models (kit.model): parsed once, kept across set reloads; the app hands over the GLB bytes.
   const models = new Map();
   async function addModel(id, glb, height) {
     if (models.has(id)) return;
     const g = await new GLTFLoader().parseAsync(glb, '');
-    models.set(id, { scene: g.scene, height: Number(height) || undefined });
+    models.set(id, { scene: g.scene, animations: g.animations || [], height: Number(height) || undefined });   // clips: animated imports
   }
-  const newKit = () => new SceneKit(scene, { onCommit: (o, info) => log.push(info.name), library, font, models,
+  const newKit = () => new SceneKit(scene, { onCommit: (o, info) => log.push(info.name), library, font, models, character,
     textures: { base: texBase, manifest, loader: texLoader } });
 
   function clearSet() {
@@ -130,6 +199,23 @@ export async function createViewer({ container = document.body, width = 1280, he
       for (;;) {
         try { new Function('kit', '"use strict";\n' + lines.join('\n'))(kit); break; }
         catch (e) {
+          if (e instanceof SyntaxError && skipped.length < MAX_SKIPS) {
+            // A syntax error has no useful line: compile ever longer prefixes (parse only, nothing runs) and drop the
+            // first block that breaks them — one bad block must not empty the whole set (10-29).
+            const ends = []; lines.forEach((l, i) => { if (i && l.startsWith('//@@')) ends.push(i); }); ends.push(lines.length);
+            let start = 0, bad = null;
+            for (const end of ends) {
+              try { new Function('kit', '"use strict";\n' + lines.slice(0, end).join('\n')); start = end; }
+              catch { bad = [start, end]; break; }
+            }
+            if (bad) {
+              const first = lines.slice(bad[0], bad[1]).find(l => l.trim() && !l.startsWith('//@@')) || '';
+              skipped.push({ line: bad[0] + 1, dropped_lines: bad[1] - bad[0], code: first.trim().slice(0, 120), error: String(e.message).slice(0, 200) });
+              lines = lines.slice(0, bad[0]).concat(lines.slice(bad[1]));
+              scene.remove(kit.root); log.length = 0; kit = newKit();
+              continue;
+            }
+          }
           const frames = [...String(e && e.stack || '').matchAll(/<anonymous>:(\d+):\d+/g)];
           const m = frames.length ? frames[frames.length - 1] : null;
           if (!m || skipped.length >= MAX_SKIPS) throw e;
@@ -147,10 +233,14 @@ export async function createViewer({ container = document.body, width = 1280, he
     }
     Object.assign(result, { stats: kit.stats, meta: kit.meta, cameras: kit.cameras.map(c => c.name), order: [...log],
       ms: Math.round(performance.now() - t0), materials: kit.materialReport() });
+    // props hanging in mid-air (a missing .at() put the tavern's table things in the aisle, 10-29): the app sends
+    // the ones its new code added back to the builder with the gap
+    try { result.floating = floaters(kit.root); } catch { result.floating = []; }
 
     // Atmosphere: light exponential fog in lit mode, scaled to the set size, so depth reads like a real space.
     box = new THREE.Box3().setFromObject(kit.root);
     setDiag = box.isEmpty() ? 10 : box.getSize(new THREE.Vector3()).length();  // set diagonal (m)
+    result.size = box.isEmpty() ? null : box.getSize(new THREE.Vector3()).toArray().map(x => Math.round(x * 10) / 10);
     fog = new THREE.FogExp2(0x15171a, fogScale * 0.9 / setDiag);
     // Sun shadows must cover the set: kit gives directional lights a fixed ±20 m / 80 m shadow box, so a sun placed
     // 375 m out over a 450 m city cast no shadows at all (10-28). Refit those lights around the set, same direction.
@@ -198,7 +288,7 @@ export async function createViewer({ container = document.body, width = 1280, he
         }
         overview.position.copy(best.pos); overview.lookAt(best.look);
       } }
-    setMode(mode);
+    setMode(mode); refreshMarkers();
     return result;
   }
 
@@ -273,7 +363,10 @@ export async function createViewer({ container = document.body, width = 1280, he
     headlight.target.position.copy(headlight.position).add(fwd.multiplyScalar(10));
   }
   // Editing helpers (gizmo, selection box) show only in the live orbit view — never in shot frames or stills.
-  function renderWith(cam) { aimHeadlight(cam); uiLayer.visible = cam === overview && looping; renderPass.camera = cam; ssr.camera = cam; composer.render(); }
+  function renderWith(cam) {
+    aimHeadlight(cam); uiLayer.visible = cam === overview && looping; renderPass.camera = cam; ssr.camera = cam; composer.render();
+    if (cam === overview && looping && markers.children.length) { renderer.autoClear = false; renderer.render(markerScene, overview); renderer.autoClear = true; }
+  }
 
   function shot(camName) {
     const cam = camName === 'overview' ? overview : kit.cameras.find(c => c.name === camName) || kit.cameras[0] || overview;
@@ -295,14 +388,15 @@ export async function createViewer({ container = document.body, width = 1280, he
    * smoothing (pathStates' window is in seconds): a 48 fps playblast equals the 24 fps one on every even frame.
    */
   function planShot(camName, move, n, amount, fps = 24) {
-    const key = `${camName}|${move}|${n}|${amount}|${fps}`;
-    if (plans.has(key)) return plans.get(key);
     const c0 = kit.cameras.find(c => c.name === camName) || kit.cameras[0];
-    const start = { pos: c0.position.toArray(), lookAt: c0.userData.lookAt, fov: c0.fov };
+    const start = { pos: c0.position.toArray(), lookAt: c0.userData.lookAt, fov: c0.fov, keys: c0.userData.keys };
+    // The camera's current pose + keyframes are part of the key: a live edit (gizmo, new keyframes) re-plans the shot.
+    const key = `${camName}|${move}|${n}|${amount}|${fps}|${JSON.stringify(start)}`;
+    if (plans.has(key)) return plans.get(key);
     // A recipe ("dolly-in:4+arc-left:6:2.5") chains moves continuously; a single move keeps the old behaviour.
     const raw = move.includes(':') || move.includes('+')
       ? pathStates(move, start, n, fps)
-      : Array.from({ length: n }, (_, i) => cameraAt(move, start, n > 1 ? i / (n - 1) : 0, { amount }));
+      : Array.from({ length: n }, (_, i) => cameraAt(move, start, n > 1 ? i / (n - 1) : 0, { amount, seconds: (n - 1) / fps }));
     // Wall avoidance is an INTERIOR concept: outdoors the look-at target is often inside a building (a cathedral), so a
     // target→camera ray would drag the camera into it (city flyover, 10-18). Exteriors fly free, ≥ 1.5 m above floor.
     const f = skyInfo.exterior ? raw.map(() => 1) : raw.map(freeFraction), win = Math.max(1, Math.round(n / 12));
@@ -317,9 +411,20 @@ export async function createViewer({ container = document.body, width = 1280, he
     plans.set(key, plan);
     return plan;
   }
+  /** Share of a 12×8 grid of canvas pixels that are exactly black (0,0,0): a frame that comes back mostly black while
+   *  its neighbour was not is a failed capture (seen once on the CPU renderer, lit pass), not a dark scene. */
+  function blackness() {
+    const gl = renderer.getContext(), px = new Uint8Array(4); let k = 0;
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 12; x++) {
+      gl.readPixels(Math.floor((x + 0.5) / 12 * gl.drawingBufferWidth), Math.floor((y + 0.5) / 8 * gl.drawingBufferHeight), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      if (px[0] === 0 && px[1] === 0 && px[2] === 0) k++;
+    }
+    return k / 96;
+  }
   /** Render frame i of n for `move` from scene camera `camName`; returns the exact camera state used. */
   function frame(camName, move, i, n, amount = 1, fps = 24) {
     const st = planShot(camName, move, n, amount, fps)[i];
+    kit?.animate(i / fps);   // people move with the shot clock: frame i always shows the same pose
     shotCam.fov = st.fov; shotCam.position.set(...st.pos); shotCam.up.set(0, 1, 0); shotCam.lookAt(...st.lookAt);
     if (st.roll) shotCam.rotateZ(st.roll);
     shotCam.updateProjectionMatrix();
@@ -339,10 +444,13 @@ export async function createViewer({ container = document.body, width = 1280, he
       const h = rc.intersectObjects(all, false)[0];
       if (!h) continue;
       const obj = h.object.parent;   // meshes are per-material children of the committed object group
-      const e = hits.get(obj.name) || { name: obj.name, category: obj.userData.category, labels: new Set(), n: 0 };
-      e.n++; e.labels.add(h.object.userData.label); hits.set(obj.name, e);
+      // People: the hit mesh sits deeper (actor → body group → rig); report the committed CHAR_ group and its motion.
+      let top = obj; while (top.parent && top.parent !== kit.root && top.userData.kind !== 'object') top = top.parent;
+      const o = top.userData.kind === 'object' ? top : obj;
+      const e = hits.get(o.name) || { name: o.name, category: o.userData.category, action: o.userData.actor?.as ?? o.userData.actor?.action, labels: new Set(), n: 0 };
+      e.n++; e.labels.add(h.object.userData.label); hits.set(o.name, e);
     }
-    return [...hits.values()].map(e => ({ name: e.name, category: e.category, labels: [...e.labels], cover: +(e.n / (GX * GY)).toFixed(4) }))
+    return [...hits.values()].map(e => ({ name: e.name, category: e.category, action: e.action, labels: [...e.labels], cover: +(e.n / (GX * GY)).toFixed(4) }))
       .sort((a, b) => b.cover - a.cover);
   }
   /**
@@ -374,14 +482,49 @@ export async function createViewer({ container = document.body, width = 1280, he
 
   // ---- Interactive viewport (app only): orbit around the set, continuous render. ----
   let controls = null, looping = false;
+  // Redraw on change, not every animation frame: an idle viewport rendering 60 fps on a CPU renderer took the cores a
+  // shot capture needed (10-29). Anything that changes the picture calls invalidate(); orbiting, people animating and
+  // a once-a-second heartbeat (late textures, anything missed) also redraw.
+  const invalidate = () => { needsRender = true; };
   function interactive(on) {
+    invalidate();
     if (on && !controls) {
       controls = new OrbitControls(overview, renderer.domElement); controls.enableDamping = true;
       controls.target.copy(box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3()));
     }
     looping = !!on;
-    const tick = () => { if (!looping) return; controls.update(); renderWith(overview); requestAnimationFrame(tick); };
+    const tick = () => {
+      if (!looping) return;
+      const moved = controls.update(), now = performance.now(), people = !!kit?.actors.length;
+      // people animate at 24 fps (film rate) — 60 fps on a CPU renderer was the same starvation as before
+      if (moved || needsRender || (people && now - lastRender > 41) || gizmo?.dragging || now - lastRender > 1000) {
+        if (people) kit.animate(parkedT ?? (now / 1000) % 600);   // people move in the live view too (or hold the parked time)
+        placeMarkers();
+        renderWith(overview); needsRender = false; lastRender = now;
+      }
+      requestAnimationFrame(tick);
+    };
     if (looping) requestAnimationFrame(tick);
+  }
+  /**
+   * Park the timeline at frame i of a shot (scrubbing): people take their pose at that time and the orbit view jumps
+   * to where the shot camera is then, so a keyframe added from the view starts from the camera's own framing.
+   * i = null unparks (people animate freely again). Returns the camera state at i.
+   */
+  function seek(camName, move, i, n, amount = 1, fps = 24) {
+    if (i === null || i === undefined) { parkedT = null; needsRender = true; return null; }
+    const st = planShot(camName, move, n, amount, fps)[Math.max(0, Math.min(n - 1, i | 0))];
+    parkedT = i / fps; kit?.animate(parkedT);
+    overview.position.set(...st.pos); overview.fov = st.fov; overview.updateProjectionMatrix();
+    if (controls) controls.target.set(...st.lookAt); else overview.lookAt(...st.lookAt);
+    needsRender = true; return st;
+  }
+  /** Put the orbit view back exactly (viewState() → setView()): a reload after an edit keeps where the user looks. */
+  function setView(s) {
+    if (!s?.pos || !s?.target) return;
+    overview.position.set(...s.pos); if (s.fov) { overview.fov = s.fov; overview.updateProjectionMatrix(); }
+    if (controls) controls.target.set(...s.target); else overview.lookAt(...s.target);
+    needsRender = true;
   }
   /** Point the orbit view at the current set (after a load) or at a scene camera. */
   function frameView(camName) {
@@ -401,6 +544,7 @@ export async function createViewer({ container = document.body, width = 1280, he
     if (gizmo) return;
     proxy = new THREE.Object3D(); uiLayer.add(proxy);
     gizmo = new TransformControls(overview, renderer.domElement); gizmo.setSize(0.8); uiLayer.add(gizmo.getHelper());
+    gizmo.addEventListener('change', () => { needsRender = true; });   // hover highlight, drags
     gizmo.addEventListener('dragging-changed', (e) => {
       if (controls) controls.enabled = !e.value;
       if (!e.value && selName) { const o = kit.root.getObjectByName(selName); if (o?.userData.edit) listeners.edit({ name: selName, ...o.userData.edit }); }
@@ -410,7 +554,10 @@ export async function createViewer({ container = document.body, width = 1280, he
       const r = new THREE.Euler().setFromQuaternion(proxy.quaternion, 'XYZ');
       const round = (v, k = 1000) => Math.round(v * k) / k;
       // Uniform scale only: take the axis the user dragged furthest (edit() keeps objects undistorted).
-      const prev = kit.root.getObjectByName(selName).userData.edit?.scale ?? 1;
+      // Lights and cameras have no size: their scale stays 1.
+      const sel = kit.root.getObjectByName(selName), aimOnly = sel.userData.kind !== 'object';
+      if (aimOnly) proxy.scale.setScalar(1);
+      const prev = sel.userData.edit?.scale ?? 1;
       const s = [proxy.scale.x, proxy.scale.y, proxy.scale.z].reduce((a, v) => Math.abs(v - prev) > Math.abs(a - prev) ? v : a, prev);
       proxy.scale.setScalar(s);
       kit.edit(selName, { pos: proxy.position.toArray().map(v => round(v)), rot: [r.x, r.y, r.z].map(v => round(v / DEG2, 10)),
@@ -421,15 +568,25 @@ export async function createViewer({ container = document.body, width = 1280, he
   const DEG2 = Math.PI / 180;
   /** Select an object by name (null = none): yellow box + gizmo in the current mode. Returns its info or null. */
   function select(name) {
+    needsRender = true;   // also reached from a click in the view, not only through the API
     selName = null; if (selBox) { uiLayer.remove(selBox); selBox.dispose?.(); selBox = null; } gizmo?.detach();
     const o = name && kit?.root.getObjectByName(name);
-    if (!o || o.userData.kind !== 'object') return null;
-    selName = name; selBox = new THREE.BoxHelper(o, 0xf2ff59); uiLayer.add(selBox);
+    if (!o || !['object', 'light', 'camera'].includes(o.userData.kind)) return null;
+    selName = name;
+    // Marker: objects get a box; a camera shows its view frustum; a light a small sphere that follows it.
+    if (o.userData.kind === 'object') selBox = new THREE.BoxHelper(o, 0xf2ff59);
+    else if (o.userData.kind === 'camera') selBox = new THREE.CameraHelper(o);
+    else {
+      selBox = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 8), new THREE.MeshBasicMaterial({ color: 0xf2ff59, wireframe: true }));
+      selBox.update = () => selBox.position.copy(o.position); selBox.update();
+    }
+    uiLayer.add(selBox);
     ensureGizmo();
     const e = o.userData.edit || { pos: o.userData.pivot, rot: [0, 0, 0], scale: 1 };
     proxy.position.set(...e.pos); proxy.rotation.set(...e.rot.map(v => v * DEG2)); proxy.scale.setScalar(Array.isArray(e.scale) ? e.scale[0] : e.scale);
     if (gizmoMode) { gizmo.setMode(gizmoMode); gizmo.attach(proxy); }
-    return { name, category: o.userData.category, ...e };
+    const light = o.isLight ? { type: o.userData.type, color: '#' + o.color.getHexString(), intensity: o.intensity, on: o.visible } : undefined;
+    return { name, category: o.userData.category ?? (o.isLight ? 'LGT' : o.userData.kind === 'camera' ? 'CAM' : undefined), ...e, light };
   }
   /** Gizmo mode: 'translate' | 'rotate' | 'scale' | null (orbit only). */
   function setGizmo(mode) {
@@ -445,6 +602,9 @@ export async function createViewer({ container = document.body, width = 1280, he
     const r = renderer.domElement.getBoundingClientRect();
     ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), overview);
     ray.near = 0; ray.far = Infinity;
+    markerScene.updateMatrixWorld();
+    const icon = ray.intersectObjects(markers.children, false)[0];   // light / camera icons win over what is behind them
+    if (icon) { listeners.pick(select(icon.object.userData.pick)); return; }
     const hit = kit ? ray.intersectObjects(objectGroups(), true)[0] : null;
     let o = hit?.object; while (o && o.parent !== kit.root) o = o.parent;
     listeners.pick(o ? select(o.name) : (select(null), null));
@@ -455,13 +615,26 @@ export async function createViewer({ container = document.body, width = 1280, he
     catch (e) { return { ok: false, error: String(e && e.message || e) }; }
     if (selName && !kit.root.getObjectByName(selName)) select(null);
     box = new THREE.Box3().setFromObject(kit.root); setMode(mode);   // new lights + kit.settings() take effect
+    refreshMarkers();   // added / removed lights and cameras get / lose their icon
     return { ok: true, stats: { ...kit.stats }, cameras: kit.cameras.map(c => c.name) };
   }
-  const objects = () => objectGroups().map(o => ({ name: o.name, category: o.userData.category, triangles: o.userData.triangles || 0 }));
+  const objects = () => [...objectGroups().map(o => ({ name: o.name, category: o.userData.category, triangles: o.userData.triangles || 0 })),
+    ...(kit ? kit.root.children.filter(o => o.userData.kind === 'light' || o.userData.kind === 'camera')
+      .map(o => ({ name: o.name, category: o.userData.kind === 'camera' ? 'CAM' : 'LGT', triangles: 0, kind: o.userData.kind })) : [])];
   /** Current orbit view (for "add camera here" and placing new things in front of the user). */
   function viewState() {
     const target = controls ? controls.target.clone() : new THREE.Vector3(0, 0, -1).applyQuaternion(overview.quaternion).add(overview.position);
-    return { pos: overview.position.toArray(), target: target.toArray(), fov: overview.fov, hit: supportPoint() };
+    const hit = supportPoint();
+    return { pos: overview.position.toArray(), target: target.toArray(), fov: overview.fov, hit, ground: hit && groundBelow(hit) };
+  }
+  /** The walkable ground under a point: the LOWEST upward-facing surface straight below it (a person added while the
+   *  view looks at a shelf or a table stands on the floor under it, not on top of it); y = 0 when there is none. */
+  function groundBelow(p) {
+    const up = (h) => h.face && h.face.normal.clone().transformDirection(h.object.matrixWorld).y > 0.7;
+    ray.set(new THREE.Vector3(p[0], p[1] + 0.05, p[2]), new THREE.Vector3(0, -1, 0)); ray.near = 0; ray.far = 1e4;
+    const hits = ray.intersectObjects(objectGroups(), true).filter(up);
+    ray.far = Infinity;
+    return hits.length ? hits[hits.length - 1].point.toArray() : [p[0], 0, p[2]];
   }
   /**
    * Where a new model / shape should STAND: a floor-like surface under the centre of the view. The first surface the
@@ -483,8 +656,9 @@ export async function createViewer({ container = document.body, width = 1280, he
     return g ? g.point.toArray() : [from.x, 0, from.z];
   }
 
-  return { load, setMode, shot, frame, visible, exportGLB, setSize, texturesSettled, interactive, frameView,
-    select, setGizmo, exec, objects, viewState, addModel, hasModel: (id) => models.has(id), on: (ev, f) => { listeners[ev] = f; },
+  const dirty = (f) => (...a) => { const r = f(...a); needsRender = true; if (r && typeof r.then === 'function') r.finally(() => { needsRender = true; }); return r; };
+  return { load: dirty(load), setMode: dirty(setMode), shot, frame, seek, setView, renderView: () => renderWith(overview), visible, exportGLB, setSize: dirty(setSize), texturesSettled, interactive, frameView: dirty(frameView),
+    blackness, select: dirty(select), setGizmo: dirty(setGizmo), exec: dirty(exec), objects, viewState, addModel: dirty(addModel), hasModel: (id) => models.has(id), on: (ev, f) => { listeners[ev] = f; },
     MOVES, get canvas() { return renderer.domElement; }, renderer, get result() { return result; },
     get cameras() { return kit ? kit.cameras.map(c => c.name) : []; } };
 }

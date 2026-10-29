@@ -15,6 +15,8 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 import { useEditTools, type RecordEdit } from "./EditTools";
 import { ViewerBridge, type ViewerResult } from "@/lib/viewer-bridge";
+import { joinCode } from "@/lib/scene-code";
+import { shotIntent } from "@/lib/shot-intent";
 
 type Use = { route: string; model: string };
 type Opt = { id: string; label: string; note?: string };
@@ -41,7 +43,14 @@ const GROUPS: { name: string; moves: string[] }[] = [
   { name: "Up and down", moves: ["crane-up", "crane-down", "pedestal-up", "pedestal-down", "tilt-up", "tilt-down"] },
   { name: "Turn and circle", moves: ["arc-left", "arc-right", "drone-orbit", "bullet-time", "pan-left", "pan-right", "whip-pan"] },
   { name: "Big and special", moves: ["aerial-pullback", "helicopter-shot", "robot-arm", "handheld", "pov", "snorricam", "rack-focus", "static-shot"] },
+  { name: "Your own", moves: ["path"] },
 ];
+/** The keyframes of one camera's custom path: the last kit.cameraPath line for it in the scene code ([] when none). */
+function pathKeys(code: string, cam: string | null): number[][] {
+  if (!cam) return [];
+  const all = [...code.matchAll(/kit\.cameraPath\('([A-Za-z0-9_]+)',\s*(\[[-0-9.,\s\[\]e]*\])\s*\);/g)].filter((m) => m[1] === cam);
+  try { return all.length ? JSON.parse(all[all.length - 1][2]) : []; } catch { return []; }
+}
 const CHAT_MODES = { auto: "Auto", ask: "Ask first", go: "Don't ask", chat: "Chat only" } as const;
 const CHAT_MODE_HELP: Record<keyof typeof CHAT_MODES, string> = { auto: "Auto: ask only when the idea is unclear",
   ask: "Ask first: questions before building", go: "Don't ask: decide and build", chat: "Chat only: answers, no changes" };
@@ -53,16 +62,22 @@ const EXAMPLES = [
   { id: "neon", title: "Neon alley in the rain", prompt: "A narrow rainy neon alley at night with a ramen stall" },
   { id: "city", title: "Medieval city", prompt: "A dense medieval walled city at golden hour with a cathedral, river and castle" },
   { id: "moon", title: "Moon base", prompt: "A moon colony with spaceships and space rockets parked there" },
+  { id: "cafe", title: "Rainy night street caf\u00e9", prompt: "A rainy night street in an old European city with a small coffee cart under string lights" },
+  { id: "tavern", title: "Tavern cellar", prompt: "A lantern-lit tavern cellar under an old inn, late evening, with patrons by the fire" },
+  { id: "reading", title: "Reading room at golden hour", prompt: "A cozy reading room in an old townhouse at golden hour, a woman reading on the sofa" },
+  { id: "temple", title: "Desert temple at dawn", prompt: "Ancient desert temple ruins at dawn with travellers climbing the stairway" },
 ];
-const label = (m: string) => m.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase());
+const label = (m: string) => (m === "path" ? "Custom path" : m.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()));
 const camLabel = (c: string) => c.replace(/^CAM_/, "").replace(/_/g, " ");
 // Shots up to 60 s (Higgsfield's range); > 15 s render as overlapping LTX segments (lib/render.ts planSegments).
 const MAX_SECONDS = 60;
 const frameCount = (seconds: number, fps: number) => Math.round((seconds * fps) / 8) * 8 + 1;   // LTX: 8k+1 frames
 // Frame formats. Clip sides divisible by 64 (LTX); `look` = the image model's nearest size (cropped to the clip).
-// LTX L2R scales the shorter side, so every format renders natively (9:16 + 1:1 tested 10-28).
-const ASPECTS = { "16:9": { w: 1920, h: 1088, look: "1536x1024" }, "9:16": { w: 1088, h: 1920, look: "1024x1536" },
-  "1:1": { w: 1088, h: 1088, look: "1024x1024" } } as const;
+// LTX L2R scales the shorter side to 544 then ×2, and the long side must then be a multiple of 32: 4:3 = 1472×1088,
+// 21:9 = 2560×1088 (2.35:1 scope). Every format renders natively (9:16 + 1:1 tested 10-28).
+const ASPECTS = { "16:9": { w: 1920, h: 1088, look: "1536x1024", label: "16:9 landscape" }, "9:16": { w: 1088, h: 1920, look: "1024x1536", label: "9:16 vertical" },
+  "1:1": { w: 1088, h: 1088, look: "1024x1024", label: "1:1 square" }, "4:3": { w: 1472, h: 1088, look: "1536x1024", label: "4:3 classic" },
+  "3:4": { w: 1088, h: 1472, look: "1024x1536", label: "3:4 portrait" }, "21:9": { w: 2560, h: 1088, look: "1536x1024", label: "21:9 cinema" } } as const;
 type Aspect = keyof typeof ASPECTS;
 type Spend = { credits: number; usd: number; unreported: number };
 const NO_SPEND: Spend = { credits: 0, usd: 0, unreported: 0 };
@@ -111,6 +126,12 @@ export default function Studio() {
   const SIZE = ASPECTS[aspect];
   const [ref, setRef] = useState<string | null>(null);
   const [scenes, setScenes] = useState<SceneCard[]>([]);
+  // Camera strip order = order first seen: a change that redefines CAM_main must not move it to the end of the strip.
+  const camOrder = useRef<string[]>([]);
+  const camsInOrder = (cams: string[]) => {
+    for (const c of cams) if (!camOrder.current.includes(c)) camOrder.current.push(c);
+    return camOrder.current.filter((c) => cams.includes(c));
+  };
   const [homePrompt, setHomePrompt] = useState("");
 
   // ---------- studio ----------
@@ -140,6 +161,7 @@ export default function Studio() {
   const [cam, setCam] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [recipe, setRecipe] = useState<{ move: string; seconds: number }[]>([{ move: "dolly-in", seconds: 4 }]);
+  const [renderSoon, setRenderSoon] = useState(false);   // "film it" in chat: render once the new shot is in state
   const [sel, setSel] = useState(0);
   const [playhead, setPlayhead] = useState<number | null>(null);
   const [takes, setTakes] = useState<Take[]>([]);
@@ -185,23 +207,34 @@ export default function Studio() {
     return () => { live = false; };
   }, [built, head, scene?.cameras.join(",")]);   // eslint-disable-line react-hooks/exhaustive-deps -- cameras: undo/redo set head before the reload lands
 
+  async function renameScene(id: string, title: string) { await api(`/api/scenes/${id}`, { method: "PATCH", json: { title } }); await refreshScenes(); }
+  async function deleteScene(id: string) { await api(`/api/scenes/${id}`, { method: "DELETE" }); await refreshScenes(); }
   async function refreshScenes() { try { setScenes((await api<{ scenes: SceneCard[] }>("/api/scenes")).scenes); } catch { /* none yet */ } }
   function resetStudio() {
     setSceneId(null); setTitle("Untitled set"); setSpend(NO_SPEND); setPrompt(""); setInput(""); setBrief(null); setVersions([]); setHead(-1); setScene(null); setBuilt(false);
     setMsgs([]); setAnswers({}); setCam(null); setThumbs({}); setTakes([]); setShowing(null); setRecipe([{ move: "dolly-in", seconds: 4 }]); setSel(0);
   }
-  function openStudio(then: (a: Live) => void) { resetStudio(); pending.current = then; setView("studio"); }
+  function openStudio(then: (a: Live) => void) {
+    resetStudio();
+    // Already in the studio with a running viewport: it will not start again, so run after the reset has rendered.
+    if (view === "studio" && viewerReady && bridge.current) setTimeout(() => then(live.current), 0);
+    else { pending.current = then; setView("studio"); }
+  }
 
   // ---------- versions: every build step / change is one version; undo/redo move the head ----------
   async function commitVersion(next: string, note: string, list = versions, at = head) {
-    const v = [...list.slice(0, at + 1), { code: next, note, at: new Date().toISOString() }];
+    // Editing an older version never drops the later ones: that version is restored as the newest first (undo goes
+    // back to it), then the edit follows it.
+    const now = new Date().toISOString();
+    const restored = at >= 0 && at < list.length - 1 ? [{ code: list[at].code, note: `Restored version ${at + 1}`, at: now }] : [];
+    const v = [...(at < 0 ? [] : list), ...restored, { code: next, note, at: now }];
     setVersions(v); setHead(v.length - 1);
-    setReloads((n) => n + 1); const r = await bridge.current!.load(next); setScene(r);
+    setReloads((n) => n + 1); const r = await bridge.current!.load(next, true); setScene(r);
     return { r, v };
   }
   async function goto(h: number) {
     if (h < 0 || h >= versions.length || busy) return;
-    setHead(h); setReloads((n) => n + 1); const r = await bridge.current!.load(versions[h].code); setScene(r);
+    setHead(h); setReloads((n) => n + 1); const r = await bridge.current!.load(versions[h].code, true); setScene(r);
     setCam((c) => (c && r.cameras.includes(c) ? c : r.cameras[0] ?? null)); setBuilt(r.cameras.length > 0 || built);
   }
   // save() runs inside long async chains (a build saves after each step) whose closures were made before the title,
@@ -244,10 +277,31 @@ export default function Studio() {
     openStudio(async () => {
       const s = await api<{ id: string; title: string; prompt: string; brief: Ready | null; versions: Version[]; head: number; chat: Msg[]; takes: Take[]; aspect?: Aspect; spend?: Spend }>(`/api/scenes/${id}`);
       setSceneId(s.id); setTitle(s.title); setAspect(s.aspect ?? "16:9"); setSpend(s.spend ?? NO_SPEND); setPrompt(s.prompt); setBrief(s.brief); setVersions(s.versions); setHead(s.head);
-      setMsgs([...(s.chat || []), { kind: "note", text: "Scene opened. Carry on where you left off." }]); setTakes(s.takes || []);
+      const opened = "Scene opened. Carry on where you left off.";   // once, not once per reopen
+      setMsgs([...((s.chat || []) as Msg[]).filter((m) => !(m.kind === "note" && "text" in m && m.text === opened)), { kind: "note", text: opened }]); setTakes(s.takes || []);
       setReloads((n) => n + 1); const r = await bridge.current!.load(s.versions[s.head]?.code ?? ""); setScene(r); setCam(r.cameras[0] ?? null); setBuilt(true);
       if (r.cameras[0]) await bridge.current?.view(r.cameras[0]);
     });
+  }
+  /** Share: the set as a file another Open 3D Jutsu can open (versions, plan, format — no videos, no chat). */
+  function downloadSceneFile() {
+    const { title, prompt, brief, aspect } = meta.current;
+    const file = { format: "open-3d-jutsu-scene", version: 1, title, prompt, brief, aspect, versions, head };
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(file)], { type: "application/json" }));
+    a.download = `${(title || "set").replace(/[^\w .-]+/g, "").slice(0, 40) || "set"}.o3j.json`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+    push({ kind: "note", text: `Saved ${a.download}: open it in Open 3D Jutsu with "Open scene file" on the start page. Models from your own packs travel only as names — the other side needs the same packs.` });
+  }
+  async function openSceneFile(f: File) {
+    try {
+      const s = JSON.parse(await f.text());
+      if (s?.format !== "open-3d-jutsu-scene" || !Array.isArray(s.versions) || !s.versions.length || s.versions.some((v: Version) => typeof v?.code !== "string"))
+        throw new Error("that is not an Open 3D Jutsu scene file");
+      const { id } = await api<{ id: string }>("/api/scenes", { json: { title: String(s.title || f.name).slice(0, 120), prompt: String(s.prompt || ""),
+        brief: s.brief ?? null, aspect: s.aspect, versions: s.versions.map((v: Version) => ({ code: v.code, note: String(v.note || ""), at: String(v.at || "") })),
+        head: Math.min(Math.max(0, Number(s.head) || 0), s.versions.length - 1), chat: [], takes: [] } });
+      openSaved(id);
+    } catch (e) { alert(`Could not open the scene file: ${(e as Error).message}`); }
   }
   function openBlank() { openStudio((a) => a.push({ kind: "note", text: "Describe the place you want to film. I'll plan it, show a concept picture and build it as a 3D set." })); }
 
@@ -256,6 +310,7 @@ export default function Studio() {
     const text = input.trim(); if (!text || busy) return;
     setInput(""); push({ kind: "user", text });
     if (chatMode === "chat") return ask(text);
+    if (built && shotOnly(text)) return;
     // A built set always takes the text as a change — also when it has no saved plan (sets saved before 10-29 lost
     // theirs, and a saved example has none); only an empty studio starts a new set.
     if (built) await change(text);
@@ -263,6 +318,21 @@ export default function Studio() {
     // Plan ready, set not built yet (concept step): the text revises the plan, then a new concept is shown.
     else { const p = `${prompt}\n${text}`; setPrompt(p); await direct(p); }
   }
+  /**
+   * A chat line that only talks about the shot ("slow dolly in for 5 s", "8 s orbit, then film it") sets the shot bar
+   * and, when asked, renders — no builder call. Lines that also change the set go to the builder as before.
+   */
+  function shotOnly(text: string) {
+    const si = shotIntent(text, MAX_SECONDS);
+    const setWords = /\b(add|remove|delete|replace|change|put|place|paint|colou?r|bigger|smaller|darker|brighter|swap|build|create|more|less)\b|\bmake (it|them|the (?!video|clip|shot|film))/i;
+    if (!si || setWords.test(text)) return false;
+    if (si.recipe.length) { setRecipe(si.recipe); setSel(0); }
+    const shot = si.recipe.map((r) => `${label(r.move)} ${r.seconds} s`).join(", then ");
+    if (si.render) { push({ kind: "note", text: `${shot ? `Shot set: ${shot}. ` : ""}Rendering it now.` }); setRenderSoon(true); }
+    else push({ kind: "note", text: `Shot set: ${shot}. Press Render shot or say "film it" when you're ready.` });
+    return true;
+  }
+  useEffect(() => { if (renderSoon && !busy && cam) { setRenderSoon(false); renderShot(); } }, [renderSoon, recipeStr, busy, cam]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** Ask mode: an answer about the set or the idea; nothing is built or changed. */
   async function ask(question: string) {
     setBusy("Thinking");
@@ -287,21 +357,64 @@ export default function Studio() {
       } else await build(d, p);
     } catch (e) { push({ kind: "error", text: (e as Error).message }); } finally { setBusy(null); }
   }
+  /** Blocks of the NEW code `add` that the viewer dropped because they failed, with the error of each. */
+  function failedBlocks(add: string, r: ViewerResult) {
+    const blocks = add.split(/\n(?=\/\/@@)/);
+    return r.skipped.flatMap((s) => {
+      const b = blocks.find((x) => x.split("\n").some((l) => l.trim().slice(0, 120) === s.code));
+      return b ? [{ block: b, error: s.error }] : [];
+    });
+  }
+  /** Blocks of the NEW code `add` that define an object the viewer found hanging in mid-air, with the gap. */
+  function floatingBlocks(add: string, r: ViewerResult) {
+    const blocks = add.split(/\n(?=\/\/@@)/);
+    return (r.floating ?? []).flatMap((f) => {
+      const b = blocks.find((x) => x.includes(`kit.object('${f.name}')`) || x.includes(`kit.object("${f.name}")`));
+      return b ? [{ block: b, error: `${f.name}: ${f.parts} part${f.parts > 1 ? "s hang" : " hangs"} in mid-air, ${f.height} m above what is under ${f.parts > 1 ? "them" : "it"} at x ${f.at[0]}, z ${f.at[1]}, touching nothing that holds ${f.parts > 1 ? "them" : "it"} (often a missing .at() to the table / shelf / wall it belongs on)` }] : [];
+    });
+  }
+  /**
+   * One repair round for new code that partly failed or left props hanging in mid-air: those blocks are removed and
+   * the builder rewrites exactly those, told the errors. Replaces the version just committed (no extra version).
+   * Returns what is still failing (a prop still floating after the round is kept as it is, not reported as failed).
+   */
+  async function repairFailed(base: string, add: string, intent: string, note: string, v: Version[], r: ViewerResult) {
+    const failed = failedBlocks(add, r), floating = floatingBlocks(add, r).filter((f) => !failed.some((b) => b.block === f.block));
+    let bad = [...failed, ...floating];
+    if (!bad.length) return { code: joinCode(base, add), r, v, left: [] as string[] };
+    setBusy(failed.length ? "Fixing the parts that failed" : "Fixing things that float in mid-air");
+    const kept = bad.reduce((s, b) => s.replace(b.block, ""), add);
+    const request = `${intent}\n\nREPAIR: these blocks of the code just added ${failed.length ? "failed when run or " : ""}left things hanging in mid-air and were removed:\n`
+      + bad.map((b) => `--- error: ${b.error}\n${b.block.trim()}`).join("\n")
+      + "\nWrite corrected replacement blocks for exactly these, with the same intent and names: everything rests on, hangs from or is fixed to something. Do not repeat anything that already worked.";
+    try {
+      const { code: fix, cost } = await api<{ code: string; cost?: Spend & { calls: number } }>("/api/change", { json: { prompt, brief: brief?.brief, codeSoFar: joinCode(base, kept), request, use: use("builder") } });
+      addSpend(cost);
+      if (!failed.length && !fix.trim()) return { code: joinCode(base, add), r, v, left: [] as string[] };   // nothing came back: keep the props
+      const full = joinCode(joinCode(base, kept), fix); const res = await commitVersion(full, note, v.slice(0, -1), v.length - 2);
+      bad = failedBlocks(kept + fix, res.r);
+      return { code: full, r: res.r, v: res.v, left: bad.map((b) => b.error) };
+    } catch { return { code: joinCode(base, add), r, v, left: failed.map((b) => b.error) }; }
+  }
   async function build(d: Ready = brief!, p: string = prompt) {
     setBusy("Building the set"); push({ kind: "build", batches: d.batches, at: Date.now(), current: 0, done: false });
-    let so = code, v = versions, h = head, buildSpend = NO_SPEND;
+    let so = code, v = versions, h = head, buildSpend = NO_SPEND; const failedParts: string[] = [];
     try {
       for (let i = 0; i < d.batches.length; i++) {
         patchLast("build", (m) => ({ ...m, current: i }));
         const { code: add, cost } = await api<{ code: string; cost?: Spend & { calls: number } }>("/api/build", { json: { prompt: p, brief: d.brief, batches: d.batches, index: i,
           codeSoFar: so, use: use("builder"), refs: ref ? [ref] : undefined } });
         addSpend(cost); buildSpend = { credits: buildSpend.credits + (cost?.credits ?? 0), usd: buildSpend.usd + (cost?.usd ?? 0), unreported: buildSpend.unreported + (cost?.unreported ?? 0) };
-        so += add; const res = await commitVersion(so, `Build step ${i + 1}: ${d.batches[i]}`, v, h); v = res.v; h = v.length - 1;
+        const note = `Build step ${i + 1}: ${d.batches[i]}`; const res = await commitVersion(joinCode(so, add), note, v, h);
+        const fixed = await repairFailed(so, add, `Build step: ${d.batches[i]}`, note, res.v, res.r);
+        if (fixed.left.length) failedParts.push(...fixed.left);
+        so = fixed.code; v = fixed.v; h = v.length - 1; setBusy("Building the set");
       }
       setReloads((n) => n + 1); const r = await bridge.current!.load(so); setScene(r); setCam(r.cameras[0] ?? null); setBuilt(true);
       if (r.cameras[0]) await bridge.current?.view(r.cameras[0]);
       patchLast("build", (m) => ({ ...m, done: true }));
-      const done: Msg = { kind: "note", text: `The set is ready: ${r.stats.objects} objects, ${r.cameras.length} cameras.${r.skipped.length ? ` ${r.skipped.length} parts were skipped.` : ""} Pick a camera and a move below, or tell me what to change.${money(buildSpend) ? ` Building cost ${money(buildSpend)}.` : ""}` };
+      const si = shotIntent(p, MAX_SECONDS); if (si?.recipe.length) { setRecipe(si.recipe); setSel(0); }
+      const done: Msg = { kind: "note", text: `The set is ready: ${r.stats.objects} objects, ${r.cameras.length} cameras.${failedParts.length ? ` ${failedParts.length} part${failedParts.length > 1 ? "s" : ""} could not be built and ${failedParts.length > 1 ? "were" : "was"} left out (${failedParts.slice(0, 2).join("; ").slice(0, 160)}).` : ""} ${shotIntent(p, MAX_SECONDS)?.recipe.length ? "The shot below is set from your prompt: press Render shot" : "Pick a camera and a move below"}, or tell me what to change.${money(buildSpend) ? ` Building cost ${money(buildSpend)}.` : ""}` };
       push(done); await save({ v, h, cam: r.cameras[0] ?? null });
     } catch (e) { push({ kind: "error", text: `Building stopped: ${(e as Error).message}` }); }
     finally { setBusy(null); }
@@ -311,8 +424,10 @@ export default function Studio() {
     try {
       const { code: add, cost } = await api<{ code: string; cost?: Spend & { calls: number } }>("/api/change", { json: { prompt, brief: brief?.brief, codeSoFar: code, request, use: use("builder") } });
       addSpend(cost);
-      const { r, v } = await commitVersion(code + add, `Change: ${request.slice(0, 80)}`);
-      push({ kind: "note", text: `Done. The set now has ${r.stats.objects} objects.${money(cost ?? NO_SPEND) ? ` Cost ${money(cost!)}.` : ""} Undo is at the top if you prefer the previous version.` });
+      const note = `Change: ${request.slice(0, 80)}`; const first = await commitVersion(joinCode(code, add), note);
+      const { r, v, left } = await repairFailed(code, add, request, note, first.v, first.r);
+      const failed = left.length ? ` ${left.length} part${left.length > 1 ? "s" : ""} of the change could not be built and ${left.length > 1 ? "were" : "was"} left out (${left.slice(0, 2).join("; ").slice(0, 160)}) — try saying it differently.` : "";
+      push({ kind: "note", text: `Done. The set now has ${r.stats.objects} objects.${failed}${money(cost ?? NO_SPEND) ? ` Cost ${money(cost!)}.` : ""} Undo is at the top if you prefer the previous version.` });
       await save({ v, h: v.length - 1 });
     } catch (e) { push({ kind: "error", text: (e as Error).message }); } finally { setBusy(null); }
   }
@@ -321,20 +436,26 @@ export default function Studio() {
   async function preview() {
     if (!cam || !bridge.current) return;
     if (playhead !== null) { await bridge.current.stop(); return; }
-    setShowing(null); setPlayhead(0);
+    setShowing(null); setPlayhead(0); setPark(null);
     try { await bridge.current.play(cam, recipeStr, frameCount(seconds, 24), 24); } finally { setPlayhead(null); }
   }
-  async function renderShot() {
+  // A render that failed AFTER its frames were captured (a lost connection to the render server) continues from those
+  // frames when Render shot is pressed again for the same shot — a 30 s shot captures for about an hour (10-29).
+  const failedRender = useRef<{ key: string; id: string } | null>(null);
+  async function renderShot(resume?: string) {
     if (!cam || !bridge.current || busy) return;
     const b = bridge.current, fps = 24, n = frameCount(seconds, fps);
+    const shotKey = `${sceneId}|${head}|${cam}|${recipeStr}|${aspect}`;
+    const again = resume ?? (failedRender.current?.key === shotKey ? failedRender.current.id : null);
+    let shotId: string | null = again, captured = !!again;
     const shotLabel = `${recipe.map((r) => label(r.move)).join(", then ")}, ${seconds} s, from ${camLabel(cam)}`;
     const steps = (s: Partial<Record<RStep, "wait" | "now" | "done">>) => patchLast("render", (m) => ({ ...m, steps: { ...m.steps, ...s } }));
     setBusy("Rendering"); setShowing(null);
-    push({ kind: "render", label: shotLabel, steps: { clay: "now", look: "wait", video: "wait" } });
+    push({ kind: "render", label: shotLabel, steps: { clay: again ? "done" : "now", look: "wait", video: "wait" } });
     try {
-      const { id } = await api<{ id: string }>("/api/shots", { method: "POST" });
-      await b.interactive(false);
-      for (const m of ["clay", "lit"] as const) for (let s = 0; s < n; s += 16) {
+      const id = shotId ?? (await api<{ id: string }>("/api/shots", { method: "POST" })).id; shotId = id;
+      if (!again) await b.interactive(false);
+      if (!again) for (const m of ["clay", "lit"] as const) for (let s = 0; s < n; s += 16) {
         const frames = await b.frames({ cam, move: recipeStr, n, fps, w: SIZE.w, h: SIZE.h, mode: m, start: s, count: 16 });
         // Upload in pieces of ≤ 6 MB: Next's proxy keeps only the first 10 MB of a body, and detailed lit frames
         // at 1280×720 reach ~0.8 MB each (16 of them broke the upload, 10-28).
@@ -346,7 +467,7 @@ export default function Studio() {
           await api(`/api/shots/${id}/frames`, { form });
         }
       }
-      await b.interactive(true);
+      captured = true; await b.interactive(true);
       // One LTX job per ≤ 15 s segment (long shots overlap by 9 frames and are crossfaded, lib/render.ts planSegments).
       const enc = await api<{ segs: [number, number][] | null }>(`/api/shots/${id}/encode`, { json: { fps, n } });
       const segs = enc.segs ?? [[0, n]], long = segs.length > 1;
@@ -356,7 +477,7 @@ export default function Studio() {
         const p = await b.prompt(cam, recipeStr, n, start);
         steps({ clay: "done", look: "now" });
         const { raw, cost: lookCost } = await api<{ raw: string; cost?: Spend & { calls: number } }>(`/api/shots/${id}/look`,
-          { json: { prompt: p, use: use("look"), size: SIZE.look, ...(long ? { seg: k, start, prevStart: k ? segs[k - 1][0] : 0 } : {}) } });
+          { json: { prompt: p, use: use("look"), size: SIZE.look, format: SIZE.label, ...(long ? { seg: k, start, prevStart: k ? segs[k - 1][0] : 0 } : {}) } });
         addSpend(lookCost); if (!k) { firstLook = raw; patchLast("render", (m) => ({ ...m, look: raw })); }
         const img = await new Promise<HTMLImageElement>((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = raw; });
         // Cover-fit (centre crop), never stretch: the image model's frame is close to, not exactly, the clip's.
@@ -376,10 +497,51 @@ export default function Studio() {
       }
       if (long) { setBusy("Joining the parts"); video = (await api<{ video: string }>(`/api/shots/${id}/stitch`, { json: { n, fps } })).video; }
       const take = { id, label: shotLabel, video, clay: `/api/shots/${id}/file/clay.mp4`, thumb: firstLook };
+      failedRender.current = null;
       steps({ look: "done", video: "done" }); const tk = [...takes, take]; setTakes(tk); setShowing({ take, mode: "final" }); await save({ t: tk });
-    } catch (e) { push({ kind: "error", text: `Render stopped: ${(e as Error).message}` }); await b.interactive(true); }
+    } catch (e) {
+      if (captured && shotId) failedRender.current = { key: shotKey, id: shotId };
+      push({ kind: "error", text: `Render stopped: ${(e as Error).message}.${captured ? " Press Render shot again to continue from the frames already made." : ""}` });
+      await b.interactive(true);
+    }
     finally { setBusy(null); }
   }
+  // ---------- custom camera path: keyframes from the orbit view ----------
+  const keys = pathKeys(code, cam);
+  const segStart = (i: number) => recipe.slice(0, i).reduce((s, r) => s + r.seconds, 0);
+  async function setKeys(next: number[][], note: string, own = false) {
+    if (!cam || !bridge.current) return;
+    const sorted = [...next].sort((a, b) => (a[7] ?? 0) - (b[7] ?? 0));
+    const block = `kit.cameraPath('${cam}', ${JSON.stringify(sorted.map((k) => k.map((x) => Math.round(x * 100) / 100)))});`;
+    const r = await bridge.current.exec(block);
+    if (!r.ok) { push({ kind: "error", text: `Could not set the path: ${r.error}` }); return; }
+    await recordEdit(block, note, { stats: r.stats, cameras: r.cameras }, own ? undefined : `path:${cam}`);   // Clear = its own version (undo brings the path back)
+  }
+  /** Key time (s from the start of the selected path move): the parked playhead when it is inside that move, else
+   *  one second after the last key. Keys saved before timing get times spread over the move first. */
+  async function addKey() {
+    if (!cam || !bridge.current) return;
+    const v = await bridge.current.viewState(), len = recipe[sel]?.seconds ?? 4, s0 = segStart(sel);
+    const timed = keys.map((k, i) => (k.length >= 8 ? k : [...k.slice(0, 7), keys.length > 1 ? (i / (keys.length - 1)) * len : 0]));
+    const at = park !== null && park >= s0 && park <= s0 + len ? park - s0 : Math.min(len, timed.length ? Math.max(...timed.map((k) => k[7])) + 1 : 0);
+    const same = timed.findIndex((k) => Math.abs(k[7] - at) < 0.05);
+    const key = [...v.pos, ...v.target, v.fov, at];
+    await setKeys(same >= 0 ? timed.map((k, i) => (i === same ? key : k)) : [...timed, key],
+      same >= 0 ? `Re-frame the ${at.toFixed(1)} s keyframe of ${camLabel(cam)}` : `Path keyframe at ${at.toFixed(1)} s for ${camLabel(cam)}`);
+  }
+  // ---------- timeline scrubbing: park the playhead at a time ----------
+  const [park, setPark] = useState<number | null>(null);
+  const seeking = useRef(false);
+  async function scrubTo(sec: number | null) {
+    if (!bridge.current || !cam) return;
+    if (sec === null) { setPark(null); await bridge.current.seek(null); return; }
+    const t = Math.max(0, Math.min(seconds, sec)); setPark(t);
+    let i = 0, acc = 0; while (i < recipe.length - 1 && t >= acc + recipe[i].seconds) acc += recipe[i++].seconds;
+    setSel(i);
+    if (seeking.current) return; seeking.current = true;   // drop drag moves while one seek is in flight
+    try { await bridge.current.seek(cam, recipeStr, Math.round(t * 24), frameCount(seconds, 24), 24); } finally { seeking.current = false; }
+  }
+  useEffect(() => { setPark(null); bridge.current?.seek(null); }, [cam, recipeStr]);   // a new shot unparks
   async function downloadStill() {
     if (!cam || !bridge.current) return;
     const [f] = await bridge.current.frames({ cam, move: recipeStr, n: frameCount(seconds, 24), fps: 24, w: SIZE.w, h: SIZE.h, mode, start: 0, count: 1 });
@@ -389,6 +551,8 @@ export default function Studio() {
     const g = await bridge.current!.glb(as); const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([g], { type: "model/gltf-binary" }));
     a.download = `${title.slice(0, 40) || "set"}${as === "clay" ? "-clay" : ""}.glb`; a.click();
+    const s = scene?.size, dims = s ? `, set ${s.map((x) => Math.round(x)).join(" × ")} m` : "";
+    push({ kind: "note", text: `Saved ${a.download} (${(g.byteLength / 1e6).toFixed(1)} MB${dims}).` });
     setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
   }
 
@@ -407,7 +571,7 @@ export default function Studio() {
   const aspectChip = (locked = false) => (
     <label className="pill" title={locked ? "Frame format (fixed once takes exist)" : "Frame format"}>{Icon.frame}{aspect}
       <select aria-label="Frame format" value={aspect} disabled={locked || !!busy} onChange={(e) => setAspect(e.target.value as Aspect)}>
-        {(Object.keys(ASPECTS) as Aspect[]).map((a) => <option key={a} value={a}>{a === "16:9" ? "16:9 landscape" : a === "9:16" ? "9:16 vertical" : "1:1 square"}</option>)}
+        {(Object.keys(ASPECTS) as Aspect[]).map((a) => <option key={a} value={a}>{ASPECTS[a].label}</option>)}
       </select></label>);
   const modeChip = () => (
     <label className="pill" title="How I work with your messages">{CHAT_MODES[chatMode]}
@@ -438,7 +602,9 @@ export default function Studio() {
       base = prev.slice(0, prev.length - last.block.length); list = versions.slice(0, head); at = head - 1;
     }
     const add = `\n//@@\n${block}\n`;
-    const v = [...list.slice(0, at + 1), { code: base + add, note, at: new Date().toISOString() }];
+    const now = new Date().toISOString();   // hand edits on an older version restore it first, like commitVersion
+    const restored = at < list.length - 1 ? [{ code: list[at].code, note: `Restored version ${at + 1}`, at: now }] : [];
+    const v = [...list, ...restored, { code: base + add, note, at: now }];
     setVersions(v); setHead(v.length - 1); lastEdit.current = coalesce ? { key: coalesce, block: add } : null;
     if (live.stats) setScene((s) => (s ? { ...s, stats: live.stats, cameras: live.cameras } : s));
     await save({ v, h: v.length - 1 });
@@ -459,7 +625,9 @@ export default function Studio() {
     const acts: Record<string, (...a: any[]) => unknown> = {
       home: () => { setView("home"); refreshScenes(); },
       openExample: (id: string) => { const ex = EXAMPLES.find((x) => x.id === id); if (!ex) throw new Error(`no example ${id}`); openExample(ex); },
-      openBlank, openSaved: (id: string) => openSaved(id),
+      openBlank, openSaved: (id: string) => openSaved(id), renameScene: (id: string, t: string) => renameScene(id, t), deleteScene: (id: string) => deleteScene(id), shareFile: downloadSceneFile, addKey: () => addKey(), clearKeys: () => setKeys([], "Clear the path", true), seek: (s: number | null) => scrubTo(s),
+      viewFrom: (c: string) => bridge.current?.view(c),   // move only the orbit view (tests: frame keyframes from other cameras)
+      openSceneText: (text: string, name = "scene.o3j.json") => openSceneFile(new File([text], name, { type: "application/json" })),
       homePrompt: (text: string) => setHomePrompt(text), startFromPrompt,
       ref: (dataUrl: string | null) => setRef(dataUrl),
       aspect: (a: Aspect) => { if (!(a in ASPECTS)) throw new Error(`no aspect ${a}`); setAspect(a); },   // reference picture as a data: URL (null = remove)
@@ -473,13 +641,13 @@ export default function Studio() {
       move: (i: number, m: string) => setRecipe((r) => r.map((x, k) => (k === i ? { ...x, move: m } : x))),
       length: (i: number, s: number) => setRecipe((r) => r.map((x, k) => (k === i ? { ...x, seconds: s } : x))),
       addMove: (m = "arc-left", s = 4) => { setRecipe((r) => [...r, { move: m, seconds: s }]); setSel(recipe.length); },
-      select: (i: number) => setSel(i), preview, render: renderShot, undo: () => goto(head - 1), redo: () => goto(head + 1), version: (h: number) => goto(h),
+      select: (i: number) => setSel(i), preview, render: () => renderShot(), resumeRender: (id: string) => renderShot(id), undo: () => goto(head - 1), redo: () => goto(head + 1), version: (h: number) => goto(h),
       mode: (m: "lit" | "clay") => { setMode(m); return bridge.current?.mode(m); },
       showTake: (i: number, m: "final" | "clay" | "side" = "final") => { const tk = takes[i]; if (tk) setShowing({ take: tk, mode: m }); },
       editMode: (m: "translate" | "rotate" | "scale" | null) => edit.acts.setMode(m), selectObject: (n: string | null) => edit.acts.select(n),
       editSelected: (e: { pos?: number[]; rot?: number[]; scale?: number }) => edit.acts.editSelected(e),
       duplicate: () => edit.acts.duplicate(), deleteSelected: () => edit.acts.remove(), addThing: (k: string) => edit.acts.add(k),
-      objectsPanel: () => edit.acts.toggleList(), scenePanel: (on: boolean) => edit.acts.scenePanel(on),
+      objectsPanel: () => edit.acts.toggleList(), scenePanel: (on: boolean) => edit.acts.scenePanel(on), setLight: (p: { color?: string; intensity?: number; on?: boolean }) => edit.acts.setLight(p),
       sceneSettings: (p: { exposure?: number; lights?: number; background?: string | null }) => edit.acts.changeProps({ ...edit.props, ...p }),
       chatMode: (m: "auto" | "ask" | "go" | "chat") => setChatMode(m),
       library: (q: string) => edit.acts.searchLib(q), placeResult: (i = 0) => edit.acts.placeResult(i),
@@ -488,8 +656,8 @@ export default function Studio() {
     };
     (window as any).__o3j = {
       act: Object.fromEntries(Object.entries(acts).map(([k, f]) => [k, wrap(k, f)])),
-      state: () => ({ view, title, busy, built, viewerReady, sceneId, head, versions: versions.length, notes: versions.map((v) => v.note), edit: { mode: edit.mode, sel: edit.sel?.name ?? null, note: versions[head]?.note, props: edit.props, lib: edit.lib }, chatMode, thumbs: Object.keys(thumbs), scene: scene && { stats: scene.stats, cameras: scene.cameras, skipped: scene.skipped.length },
-        cam, recipe, sel, playhead, takes: takes.map((x) => x.label), showing: showing && { take: showing.take.label, mode: showing.mode },
+      state: () => ({ view, title, busy, scenes: scenes.map((s) => ({ id: s.id, title: s.title })), built, viewerReady, sceneId, head, versions: versions.length, notes: versions.map((v) => v.note), edit: { mode: edit.mode, sel: edit.sel?.name ?? null, light: edit.sel?.light ?? null, note: versions[head]?.note, props: edit.props, lib: edit.lib }, chatMode, thumbs: Object.keys(thumbs), scene: scene && { stats: scene.stats, cameras: scene.cameras, skipped: scene.skipped.length, floating: scene.floating ?? [] },
+        cam, recipe, sel, playhead, park, keys: keys.length, keyTimes: keys.map((k) => k[7] ?? null), takes: takes.map((x) => x.label), showing: showing && { take: showing.take.label, mode: showing.mode },
         model: builderUse ?? config?.defaults.builder, routes: config?.routes, msgs: msgs.map((m) => ({ kind: m.kind, text: "text" in m ? m.text : undefined })) }),
       log: () => dbgLog.current.slice(-200),
     };
@@ -500,7 +668,7 @@ export default function Studio() {
     <div>
       <header className="topbar">
         <span className="brand">Comfy</span><span className="divider" aria-hidden /><span className="title">Open 3D Jutsu</span><span className="badge">BETA</span>
-        <a className="topbar-link" href="https://github.com/" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
+        <a className="topbar-link" href="https://github.com/martinsbrezauckis/open-3d-jutsu" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
       </header>
       <main className="home">
         <section className="hero">
@@ -525,10 +693,18 @@ export default function Studio() {
           <h2>My scenes</h2>
           <div className="grid3">
             <button className="card" onClick={openBlank}><div className="pic"><span className="blank-icon">{Icon.cube}</span></div><div className="meta">Create blank scene</div></button>
+            <label className="card" title="Open a scene someone shared with you (.o3j.json)"><div className="pic"><span className="blank-icon">{Icon.plus}</span></div>
+              <div className="meta">Open scene file</div>
+              <input type="file" accept=".json,application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) openSceneFile(f); }} /></label>
             {scenes.map((s) => (
-              <button key={s.id} className="card" onClick={() => openSaved(s.id)}>
-                <div className="pic"><img src={`/api/scenes/${s.id}?thumb=1`} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /></div>
-                <div className="meta">{s.title}<small>{new Date(s.updated).toLocaleString()}</small></div></button>))}
+              <div key={s.id} className="card-wrap">
+                <button className="card" onClick={() => openSaved(s.id)}>
+                  <div className="pic"><img src={`/api/scenes/${s.id}?thumb=1`} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /></div>
+                  <div className="meta">{s.title}<small>{new Date(s.updated).toLocaleString()}</small></div></button>
+                <span className="card-acts">
+                  <button className="ghost" aria-label={`Rename ${s.title}`} onClick={() => { const t = window.prompt("New name", s.title); if (t && t.trim()) renameScene(s.id, t); }}>Rename</button>
+                  <button className="ghost" aria-label={`Delete ${s.title}`} onClick={() => { if (window.confirm(`Delete "${s.title}"? It moves to the trash folder.`)) deleteScene(s.id); }}>Delete</button>
+                </span></div>))}
           </div>
         </section>
 
@@ -559,6 +735,7 @@ export default function Studio() {
         <button className="pill" disabled={head >= versions.length - 1 || !!busy} onClick={() => goto(head + 1)} title={versions[head + 1]?.note}>{Icon.redo}Redo</button>
         {versions.length > 0 && <label className="pill" title="Versions of this set">Version {head + 1} of {versions.length}
           <select aria-label="Versions" value={head} onChange={(e) => goto(Number(e.target.value))}>{versions.map((v, i) => <option key={i} value={i}>{i + 1}. {v.note}</option>)}</select></label>}
+        <button className="pill" disabled={!versions.length || !!busy} onClick={downloadSceneFile} title="Download this set as a file to share">Share</button>
         {modelChip()}
       </header>
 
@@ -625,7 +802,7 @@ export default function Studio() {
             </div>
 
             <div className="shotbar" aria-label="Shot">
-              <div className="cams">{(scene?.cameras ?? []).map((c) => (
+              <div className="cams">{camsInOrder(scene?.cameras ?? []).map((c) => (
                 <button key={c} className="cam" aria-pressed={cam === c} onClick={() => { setCam(c); setShowing(null); bridge.current?.view(c); }}>
                   {thumbs[c] ? <img src={thumbs[c]} alt="" /> : <div className="ph" />}<span>{camLabel(c)}</span></button>))}</div>
               <label className="pill" title="Camera move">{label(recipe[sel]?.move ?? "dolly-in")}
@@ -633,26 +810,35 @@ export default function Studio() {
                   {GROUPS.map((g) => <optgroup key={g.name} label={g.name}>{g.moves.map((m) => <option key={m} value={m}>{label(m)}</option>)}</optgroup>)}</select></label>
               <label className="pill" title="Length of this move">{Icon.clock}{recipe[sel]?.seconds} s
                 <select aria-label="Length" value={recipe[sel]?.seconds} onChange={(e) => setRecipe(recipe.map((r, i) => (i === sel ? { ...r, seconds: Number(e.target.value) } : r)))}>
-                  {[2, 3, 4, 5, 6, 8, 10, 12, 15].map((s) => <option key={s} value={s} disabled={total - (recipe[sel]?.seconds ?? 0) + s > MAX_SECONDS}>{s} s</option>)}</select></label>
+                  {[1, 2, 3, 4, 5, 6, 8, 10, 12, 15].map((s) => <option key={s} value={s} disabled={total - (recipe[sel]?.seconds ?? 0) + s > MAX_SECONDS}>{s} s</option>)}</select></label>
               <button className="pill" disabled={total >= MAX_SECONDS} onClick={() => { setRecipe([...recipe, { move: "arc-left", seconds: Math.min(4, MAX_SECONDS - total) }]); setSel(recipe.length); }}>{Icon.plus}Add move</button>
               {aspectChip(takes.length > 0)}
               <span className="grow" />
               <button className="ghost" disabled={!cam} onClick={downloadStill}>Still</button>
               <button className="ghost" disabled={!scene} title="3D set with materials and textures (Blender, Unreal, Unity); Shift-click for geometry only" onClick={(e) => downloadGLB(e.shiftKey ? "clay" : "lit")}>GLB</button>
               {showing && <a className="ghost" href={showing.take.video} download>Video</a>}
-              <button className="action" disabled={!built || !cam || total > MAX_SECONDS || !!busy} onClick={renderShot} title={total > 15 ? "Longer than 15 s: rendered in parts and joined" : undefined}>Render shot</button>
+              <button className="action" disabled={!built || !cam || total > MAX_SECONDS || !!busy} onClick={() => renderShot()} title={total > 15 ? "Longer than 15 s: rendered in parts and joined" : undefined}>Render shot</button>
             </div>
 
             <div className="timeline" aria-label="Timeline">
               <button className="play" disabled={!cam} onClick={preview} aria-label={playhead !== null ? "Stop preview" : "Preview the move"}>
                 {playhead !== null ? <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg> : <svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z" /></svg>}</button>
-              <div className="track">
-                {recipe.reduce<{ el: React.ReactNode[]; x: number }>((acc, r, i) => { const w = (r.seconds / track) * 100;
-                  acc.el.push(<button key={i} className="seg-move" aria-pressed={sel === i} style={{ left: `${acc.x}%`, width: `calc(${w}% - 4px)` }} onClick={() => setSel(i)}
-                    title="Select to change this move">{label(r.move)} {r.seconds} s</button>); acc.x += w; return acc; }, { el: [], x: 0 }).el}
-                {playhead !== null && <span className="head" style={{ left: `${playhead * (total / track) * 100}%` }} />}
+              <div className="track" title="Click or drag to look at a moment of the shot"
+                onPointerDown={(e) => { if (playhead !== null || !cam) return; const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.setPointerCapture(e.pointerId); scrubTo(((e.clientX - r.left) / r.width) * track); }}
+                onPointerMove={(e) => { if (!e.buttons || playhead !== null || !cam) return; const r = e.currentTarget.getBoundingClientRect(); scrubTo(((e.clientX - r.left) / r.width) * track); }}>
+                {recipe.reduce<{ el: React.ReactNode[]; x: number }>((acc, r, i) => { const w = (r.seconds / track) * 100, x0 = acc.x;
+                  acc.el.push(<button key={i} className="seg-move" aria-pressed={sel === i} style={{ left: `${x0}%`, width: `calc(${w}% - 4px)` }} onClick={(e) => { if (e.detail === 0) setSel(i); }}
+                    title="Click or drag to look at a moment; this move is selected for changes">{label(r.move)} {r.seconds} s</button>);
+                  if (r.move === "path") for (const k of keys) if (k.length >= 8 && k[7] <= r.seconds)
+                    acc.el.push(<span key={`k${i}-${k[7]}`} className="key" style={{ left: `${x0 + (k[7] / track) * 100}%` }} title={`Keyframe at ${k[7].toFixed(1)} s`} />);
+                  acc.x += w; return acc; }, { el: [], x: 0 }).el}
+                {(playhead ?? (park !== null ? park / Math.max(1e-6, total) : null)) !== null && <span className="head" style={{ left: `${(playhead ?? park! / total) * (total / track) * 100}%` }} />}
               </div>
-              <span className="time">{playhead !== null ? `${(playhead * total).toFixed(1)} s / ` : ""}{total} s of {MAX_SECONDS}
+              {recipe[sel]?.move === "path" && <span className="pill keys" title="Click the timeline to pick a time, frame the view, then add it: the camera passes through this view at that time">
+                {keys.length} keyframe{keys.length === 1 ? "" : "s"}{park !== null ? ` · at ${(park - segStart(sel)).toFixed(1)} s` : ""}
+                <button className="ghost" disabled={!cam || !!busy} onClick={addKey}>{Icon.plus}Add from view</button>
+                {keys.length > 0 && <button className="ghost" disabled={!!busy} onClick={() => setKeys([], `Clear the path of ${camLabel(cam!)}`, true)}>Clear</button>}</span>}
+              <span className="time">{playhead !== null ? `${(playhead * total).toFixed(1)} s / ` : park !== null ? `${park.toFixed(1)} s / ` : ""}{total} s of {MAX_SECONDS}
                 {recipe.length > 1 && <button className="x" style={{ background: "none", border: 0, color: "var(--muted)", marginLeft: 8 }} onClick={() => { setRecipe(recipe.filter((_, i) => i !== sel)); setSel(0); }}>Remove</button>}</span>
             </div>
           </div>

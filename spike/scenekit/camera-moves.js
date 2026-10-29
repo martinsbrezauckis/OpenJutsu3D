@@ -41,8 +41,46 @@ function turn(pos, look, yaw, pitch) {
 }
 
 /** Each entry: (s, t, k) -> partial camera; s = start frame, k = { d: subject distance, fwd, right, amount }. */
+// Custom path (the user's keyframes, kit.cameraPath): centripetal Catmull-Rom through every key's position and look-at
+// point, fov linear, eased at both ends. Keys come with the start state (start.keys = [[x,y,z, lx,ly,lz, fov, s?], …]).
+// Timed keys (every key has s = seconds from the start of the move, set from the timeline playhead) are passed AT
+// their time: the camera holds the first view before the first key and the last view after the last key, eases in on
+// the first span and out on the last. Untimed keys are spread evenly over the move (scenes saved before timing).
+function alongKeys(keys, t, seconds) {
+  const timed = seconds > 0 && keys.every(k => k.length >= 8 && Number.isFinite(k[7]));
+  const K = timed ? [...keys].sort((a, b) => a[7] - b[7]) : keys;
+  const P = K.map(k => ({ pos: k.slice(0, 3), look: k.slice(3, 6), fov: k[6] }));
+  if (P.length === 1) return { pos: P[0].pos, lookAt: P[0].look, fov: P[0].fov };
+  let i, u;
+  if (timed) {
+    const s = t * seconds, T = K.map(k => k[7]);
+    if (s <= T[0]) { i = 0; u = 0; } else if (s >= T[T.length - 1]) { i = P.length - 2; u = 1; }
+    else {
+      i = 0; while (i < T.length - 2 && s > T[i + 1]) i++;
+      u = (s - T[i]) / Math.max(1e-6, T[i + 1] - T[i]);
+      const first = i === 0, last = i === P.length - 2;
+      u = first && last ? u * u * (3 - 2 * u) : first ? u * u * (2 - u) : last ? u + u * u - u * u * u : u;
+    }
+  } else {
+    const e = t * t * (3 - 2 * t), f = e * (P.length - 1); i = Math.min(P.length - 2, Math.floor(f)); u = f - i;
+  }
+  const at = (j) => P[Math.max(0, Math.min(P.length - 1, j))];
+  const cr = (key) => {   // centripetal Catmull-Rom (alpha 0.5): no loops or overshoot between close keys
+    const p0 = at(i - 1)[key], p1 = at(i)[key], p2 = at(i + 1)[key], p3 = at(i + 2)[key];
+    const tj = (a, b) => Math.pow(Math.hypot(...a.map((x, q) => x - b[q])) || 1e-4, 0.5);
+    const t1 = tj(p0, p1), t2 = t1 + tj(p1, p2), t3 = t2 + tj(p2, p3), s = t1 + u * (t2 - t1);
+    const lerp = (a, b, ta, tb) => a.map((x, q) => (tb - s) / (tb - ta) * x + (s - ta) / (tb - ta) * b[q]);
+    const A1 = lerp(p0, p1, 0, t1), A2 = lerp(p1, p2, t1, t2), A3 = lerp(p2, p3, t2, t3);
+    const B1 = lerp(A1, A2, 0, t2), B2 = lerp(A2, A3, t1, t3);
+    return lerp(B1, B2, t1, t2);
+  };
+  const fa = at(i).fov, fb = at(i + 1).fov;
+  return { pos: cr('pos'), lookAt: cr('look'), fov: fa && fb ? fa + (fb - fa) * u : undefined };
+}
+
 const DEFS = {
   'static-shot':     () => ({}),
+  'path':            (s, t, o) => (s.keys && s.keys.length ? alongKeys(s.keys, t, o.seconds) : {}),
   'dolly-in':        (s, t, k) => ({ pos: v.add(s.pos, v.mul(k.fwd, ease(t) * k.d * 0.45 * k.amount)) }),
   'dolly-out':       (s, t, k) => ({ pos: v.add(s.pos, v.mul(k.fwd, -ease(t) * k.d * 0.6 * k.amount)) }),
   'slow-zoom-in':    (s, t, k) => ({ fov: s.fov / (1 + 0.35 * k.amount * t) }),
@@ -61,7 +99,7 @@ const DEFS = {
   'tracking':        (s, t, k) => { const m = v.mul(k.fwd, ease(t) * k.d * 0.5 * k.amount); return { pos: v.add(s.pos, m), lookAt: v.add(s.lookAt, m) }; },
   'pedestal-up':     (s, t, k) => lift(s, ease(t) * Math.min(2, k.d * 0.3) * k.amount),
   'pedestal-down':   (s, t, k) => lift(s, -ease(t) * Math.min(1.2, (s.pos[1] - 0.3) * 0.8) * k.amount),
-  'crane-up':        (s, t, k) => ({ pos: v.add(s.pos, [0, ease(t) * k.d * 0.6 * k.amount, 0]) }),  // rises, keeps looking at subject
+  'crane-up':        (s, t, k) => ({ pos: v.add(s.pos, [0, ease(t) * Math.min(k.d * 0.6, 8) * k.amount, 0]) }),  // rises ≤ 8 m (a real crane), keeps looking at subject
   'crane-down':      (s, t, k) => ({ pos: v.add(s.pos, [0, -ease(t) * Math.min(k.d * 0.5, s.pos[1] - 0.3) * k.amount, 0]) }),
   'tilt-up':         (s, t, k) => ({ lookAt: turn(s.pos, s.lookAt, 0, ease(t) * 0.45 * k.amount) }),
   'tilt-down':       (s, t, k) => ({ lookAt: turn(s.pos, s.lookAt, 0, -ease(t) * 0.45 * k.amount) }),
@@ -115,12 +153,12 @@ export function pathStates(recipe, start, n, fps = 24, smoothSeconds = 0.6) {
   const segs = parseRecipe(recipe);
   const total = segs.reduce((s, x) => s + x.seconds, 0);
   const starts = []; let cur = { ...start };
-  for (const s of segs) { starts.push(cur); const e = cameraAt(s.move, cur, 1, { amount: s.amount }); cur = { pos: e.pos, lookAt: e.lookAt, fov: e.fov }; }
+  for (const s of segs) { starts.push(cur); const e = cameraAt(s.move, cur, 1, { amount: s.amount, seconds: s.seconds }); cur = { pos: e.pos, lookAt: e.lookAt, fov: e.fov, keys: start.keys }; }
   const raw = [];
   for (let i = 0; i < n; i++) {
     let t = (n > 1 ? i / (n - 1) : 0) * total, k = 0;
     while (k < segs.length - 1 && t > segs[k].seconds) { t -= segs[k].seconds; k++; }
-    raw.push(cameraAt(segs[k].move, starts[k], Math.min(1, t / segs[k].seconds), { amount: segs[k].amount }));
+    raw.push(cameraAt(segs[k].move, starts[k], Math.min(1, t / segs[k].seconds), { amount: segs[k].amount, seconds: segs[k].seconds }));
   }
   if (segs.length === 1) return raw;
   const w = Math.max(1, Math.round(smoothSeconds * fps / 2));
@@ -137,6 +175,6 @@ export function cameraAt(move, start, t, opts = {}) {
   const d = v.len(v.sub(start.lookAt, start.pos)) || 1;
   const fwd = v.norm(v.sub(start.lookAt, start.pos));
   const right = v.norm(v.cross(fwd, UP));
-  const out = def(start, Math.min(1, Math.max(0, t)), { d, fwd, right, amount: opts.amount ?? 1 });
+  const out = def(start, Math.min(1, Math.max(0, t)), { d, fwd, right, amount: opts.amount ?? 1, seconds: opts.seconds });
   return { pos: out.pos || start.pos, lookAt: out.lookAt || start.lookAt, fov: out.fov || start.fov, roll: out.roll || 0, opticalOnly: !!out.opticalOnly };
 }

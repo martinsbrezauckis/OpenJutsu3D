@@ -10,12 +10,14 @@
     "spike/scenekit/DIRECTOR_PROMPT.md",
     "spike/scenekit/kit.js",
     "spike/scenekit/viewer-core.js",
+    "spike/scenekit/floaters.js",
     "spike/scenekit/studio.html",
     "spike/scenekit/camera-moves.js",
     "spike/scenekit/prompt-compiler.js",
     "spike/scenekit/materials.json",
     "spike/scenekit/fetch_textures.py",
     "spike/scenekit/assets/fonts/",
+    "spike/scenekit/assets/characters/",
     "spike/scenekit/assets/textures/manifest.json",
     "bench/debug_api.py",
     "bench/browser_gl.py",
@@ -33,6 +35,8 @@
     "bench/zip_guard_test.mts",
     "bench/ip_policy_test.mts",
     "bench/safe_fetch_test.mts",
+    "bench/scene_code_test.mts",
+    "bench/shot_intent_test.mts",
     "docs/public/"
   ],
   "exclude": [

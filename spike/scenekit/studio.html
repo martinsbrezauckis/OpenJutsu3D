@@ -33,7 +33,7 @@
 if (self.origin !== 'null') { document.body.textContent = 'studio.html only runs inside the app.'; throw new Error('not sandboxed'); }
 const APP_ORIGIN = new URL(location.href).origin;
 const base = new URL('.', import.meta.url).href;
-const { createViewer } = await import(new URL('viewer-core.js', base).href);
+const { createViewer, convertFBX } = await import(new URL('viewer-core.js', base).href);
 const { compilePrompt, MOVE_PHRASE } = await import(new URL('prompt-compiler.js', base).href);
 const VIEW = [1280, 720];
 const v = await createViewer({ width: VIEW[0], height: VIEW[1], base });
@@ -46,14 +46,32 @@ const okMove = (m) => typeof m === 'string' && m.split('+').every(s => s.split('
 /** Render frames [start, start+count) of a move at w×h, then restore the viewport. Returns JPEG/PNG ArrayBuffers. */
 // `mime`, not `type`: callers spread the message ({...m}), whose own `type` ('frames') would replace it — toBlob then
 // silently fell back to PNG (~2 MB per lit frame, broke uploads and ffmpeg, 10-28).
+// Captures resize the live canvas to the frame size; without a cover the page showed that small picture stretched
+// (a blocky flash after every edit, when camera thumbnails refresh — audit 10-29). The cover is a full-size copy of the
+// live view, shown during a capture and removed once the live view has redrawn at its own size.
+const cover = document.createElement('canvas');
+cover.style.cssText = 'position:fixed;inset:0;display:none;pointer-events:none;z-index:5';
+document.body.appendChild(cover);
+function freeze() {
+  v.renderView(); cover.width = v.canvas.width; cover.height = v.canvas.height;
+  cover.getContext('2d').drawImage(v.canvas, 0, 0); cover.style.display = 'block';
+}
+const thaw = () => requestAnimationFrame(() => requestAnimationFrame(() => { cover.style.display = 'none'; }));
 async function renderFrames({ cam, move, n, fps = 24, w, h, mode, start = 0, count = 1, mime = 'image/jpeg', quality = 0.92 }) {
-  const wasInteractive = interactiveOn; if (wasInteractive) v.interactive(false);
+  const wasInteractive = interactiveOn; if (wasInteractive) { freeze(); v.interactive(false); }
   v.setSize(w, h); v.setMode(mode);
   await v.texturesSettled();
   const out = [];
-  for (let i = start; i < Math.min(n, start + count); i++) { v.frame(cam, move, i, n, 1, fps); out.push(await blob2buf(v.canvas, mime, quality)); }
+  let prevBlack = start > 0 ? null : 0;
+  for (let i = start; i < Math.min(n, start + count); i++) {
+    v.frame(cam, move, i, n, 1, fps);
+    // A failed capture (mostly pure black while the frame before was not, or unknown at a batch start) is rendered once
+    // more; a scene that really is black (space) stays black and costs only that one retry per batch.
+    let b = v.blackness(); if (b > 0.6 && (prevBlack === null || prevBlack < 0.2)) { v.frame(cam, move, i, n, 1, fps); b = v.blackness(); }
+    prevBlack = b; out.push(await blob2buf(v.canvas, mime, quality));
+  }
   v.setSize(...VIEW); v.setMode('lit');
-  if (wasInteractive) v.interactive(true); else v.shot(v.cameras[0] || 'overview');
+  if (wasInteractive) { v.interactive(true); v.renderView(); thaw(); } else v.shot(v.cameras[0] || 'overview');
   return out;
 }
 
@@ -63,8 +81,12 @@ addEventListener('message', async (ev) => {
   try {
     switch (m.type) {
       case 'load': {
+        // keepView: a reload of the SAME scene after an edit / chat change / undo keeps where the user is looking (the
+        // fresh overview of a reload put interior views outside the room, 10-29 audit). Needs a set already shown.
+        const keep = m.keepView && v.result?.stats?.objects > 0 ? v.viewState() : null;
         const r = v.load(String(m.code || ''));
-        await v.texturesSettled(); if (!interactiveOn) v.shot(r.cameras[0] || 'overview'); v.frameView();
+        await v.texturesSettled(); if (!interactiveOn) v.shot(r.cameras[0] || 'overview');
+        if (keep) v.setView(keep); else v.frameView();
         return reply(id, { result: r });
       }
       case 'mode': v.setMode(m.mode === 'clay' ? 'clay' : 'lit'); if (!interactiveOn) v.shot(v.cameras[0] || 'overview'); return reply(id, {});
@@ -95,7 +117,7 @@ addEventListener('message', async (ev) => {
         // playing; replies when done or stopped. Uses the scene's lit look at the viewport size.
         if (!okCam(m.cam) || !okMove(m.move)) throw new Error('bad camera or move');
         const wasInteractive = interactiveOn; if (wasInteractive) v.interactive(false);
-        playing = true; const fps = m.fps || 24, n = m.n, t0 = performance.now();
+        v.seek(null); playing = true; const fps = m.fps || 24, n = m.n, t0 = performance.now();
         await new Promise((done) => {
           const step = () => {
             const i = Math.min(n - 1, Math.floor((performance.now() - t0) / 1000 * fps));
@@ -110,6 +132,14 @@ addEventListener('message', async (ev) => {
         return reply(id, {});
       }
       case 'stop': playing = false; return reply(id, {});
+      case 'fbx': {   // an imported FBX (Mixamo) → GLB with its motions; the app then stores it like any imported GLB
+        if (!(m.data instanceof ArrayBuffer)) throw new Error('no FBX data');
+        const r = await convertFBX(m.data); return reply(id, r, [r.glb]);
+      }
+      case 'seek': {   // park the timeline at frame i (i = null: unpark); replies with the camera state there
+        if (m.i !== null && (!okCam(m.cam) || !okMove(m.move))) throw new Error('bad camera or move');
+        return reply(id, { state: v.seek(m.cam, m.move, m.i === null ? null : m.i | 0, m.n, 1, m.fps || 24) });
+      }
       case 'exec': return reply(id, v.exec(String(m.code || '')));
       case 'models': {   // [{id, glb: ArrayBuffer, height}] for kit.model(); parsed once
         for (const it of (m.items || []).slice(0, 40)) if (typeof it.id === 'string' && it.glb instanceof ArrayBuffer) await v.addModel(it.id, it.glb, it.height);
@@ -129,6 +159,7 @@ addEventListener('message', async (ev) => {
   } catch (e) { reply(id, { error: String(e && e.message || e) }); }
 });
 v.on('pick', (info) => parent.postMessage({ type: 'picked', info }, APP_ORIGIN));
+addEventListener('keydown', (e) => { if (e.key === 'Escape') parent.postMessage({ type: 'key', key: 'Escape' }, APP_ORIGIN); });
 v.on('edit', (e) => parent.postMessage({ type: 'edited', ...e }, APP_ORIGIN));
 parent.postMessage({ type: 'ready', moves: v.MOVES }, APP_ORIGIN);
 </script></body></html>

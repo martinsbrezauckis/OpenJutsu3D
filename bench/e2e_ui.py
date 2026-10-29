@@ -11,14 +11,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-API = "http://127.0.0.1:3999"
-TOKEN = (ROOT / "bench" / "logs" / "debug_api.token").read_text().strip()
+# A second automation server (another port, own browser) runs a parallel job: O3J_API_PORT=3998 python3 bench/…
+PORT = int(os.environ.get("O3J_API_PORT", "3999"))
+API = f"http://127.0.0.1:{PORT}"
+TOKEN = (ROOT / "bench" / "logs" / ("debug_api.token" if PORT == 3999 else f"debug_api.{PORT}.token")).read_text().strip()
 
 
 def call(path: str, body: dict | None = None, timeout: float = 3700) -> dict:
@@ -59,7 +62,7 @@ def main():
     ap.add_argument("--route"); ap.add_argument("--model")
     ap.add_argument("--move", default="drone-orbit"); ap.add_argument("--seconds", type=int, default=4)
     ap.add_argument("--no-render", action="store_true")
-    ap.add_argument("--aspect", choices=["16:9", "9:16", "1:1"])
+    ap.add_argument("--aspect", choices=["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"])
     ap.add_argument("--example", help="skip building: open this example set (dungeon|neon|city|moon) and shoot")
     a = ap.parse_args()
 

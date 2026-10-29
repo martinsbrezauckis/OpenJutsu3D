@@ -138,7 +138,8 @@ export async function askAbout(use: Use, a: { prompt: string; brief?: string; co
 
 /** size = the image model's nearest frame to the clip (1536x1024 | 1024x1536 | 1024x1024); the client crops to the clip.
  *  styleRef = previous segment's rendered frame (long shots), so consecutive segments look the same. */
-export async function lookStill(use: Use, lit: Img, prompt: string, size = "1536x1024", styleRef?: Img): Promise<Img> {
-  const rules = editRules(FORMAT[size] ?? "16:9 landscape") + (styleRef ? STYLE_MATCH : "");
+export async function lookStill(use: Use, lit: Img, prompt: string, size = "1536x1024", styleRef?: Img, format?: string): Promise<Img> {
+  // format = the clip's own frame ("21:9 cinema"); the image model only has 3 sizes, the client crops to the clip.
+  const rules = editRules(format ?? FORMAT[size] ?? "16:9 landscape") + (styleRef ? STYLE_MATCH : "");
   return image(`${rules} Scene description: ${prompt}`, styleRef ? [lit, styleRef] : [lit], { ...use, quality: "high", size });
 }
