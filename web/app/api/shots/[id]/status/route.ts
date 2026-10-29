@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params; const d = shotDir(id);
-    const q = new URL(req.url).searchParams.get("seg"); const seg = q !== null && /^\d$/.test(q) ? Number(q) : undefined;   // long-shot segment
+    const q = new URL(req.url).searchParams.get("seg"); const seg = q !== null && /^\d{1,2}$/.test(q) ? Number(q) : undefined;   // long-shot segment
     const file = seg === undefined ? "render.mp4" : `render_s${seg}.mp4`;
     if (await stat(join(d, file)).then(() => true, () => false)) return ok({ status: "succeeded", video: `/api/shots/${id}/file/${file}` });
     const { jobId } = JSON.parse(await readFile(join(d, seg === undefined ? "job.json" : `job_s${seg}.json`), "utf8"));

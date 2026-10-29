@@ -16,7 +16,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     if (typeof prompt !== "string" || !prompt.trim()) return fail(new Error("no prompt"), 400);
     let refs; try { refs = readRefs(rawRefs); } catch (e) { return fail(e, 400); }
     // Long shots: segment `seg` starts at frame `start`; its style reference is the previous segment's render at that moment.
-    const k = Number.isInteger(seg) && seg > 0 && seg < 10 ? seg : 0, f = k ? Math.max(0, Math.min(3000, Number(start) || 0)) : 0;
+    const k = Number.isInteger(seg) && seg > 0 && seg < 100 ? seg : 0, f = k ? Math.max(0, Math.min(3000, Number(start) || 0)) : 0;
     const lit = new Uint8Array(await readFile(join(d, "lit", `f${String(f).padStart(5, "0")}.jpg`)));
     // After a camera cut the previous part's frame at `start` is already the new camera (1-frame overlap): take the
     // frame before it, the old camera's last moment, as the reference for people and look.

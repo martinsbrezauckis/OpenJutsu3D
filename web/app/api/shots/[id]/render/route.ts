@@ -9,7 +9,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     const { id } = await ctx.params; const d = shotDir(id);
     const form = await req.formData(); const look = form.get("look"); const prompt = String(form.get("prompt") || "");
-    const s = Number(form.get("seg")); const seg = Number.isInteger(s) && s >= 0 && s < 10 && form.has("seg") ? s : undefined;
+    const s = Number(form.get("seg")); const seg = Number.isInteger(s) && s >= 0 && s < 100 && form.has("seg") ? s : undefined;
     if (!(look instanceof File) || look.size > 20_000_000 || !prompt.trim()) return fail(new Error("need look PNG and prompt"), 400);
     await writeFile(join(d, seg === undefined ? "look.png" : `look_s${seg}.png`), new Uint8Array(await look.arrayBuffer()));
     if (seg === 0) await writeFile(join(d, "look.png"), new Uint8Array(await look.arrayBuffer()));   // the take's thumbnail
