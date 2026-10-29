@@ -39,6 +39,10 @@ export function parseSettings(code: string): SceneProps {
 }
 const settingsLine = (p: SceneProps) => `kit.settings({ exposure: ${p.exposure.toFixed(2)}, lights: ${p.lights.toFixed(2)}, background: '${p.background ?? "auto"}' });`;
 export const editLine = (e: ObjEdit) => `kit.edit('${e.name}', { pos: ${v3(e.pos)}, rot: ${v3(e.rot)}, scale: ${Array.isArray(e.scale) ? v3(e.scale) : r2(e.scale)} });`;
+/** Several lines as ONE version, each its own //@@ block: if a later change drops one object, a reload skips only its
+ *  line (the viewer skips a failing block), not the whole group's edit. */
+export const groupBlock = (lines: string[]) => lines.join("\n//@@\n");
+const groupKey = (names: string[]) => `edit:${names.join(",")}`;
 
 export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boolean; record: RecordEdit; onError: (msg: string) => void; reloads: number; code: string }) {
   const [mode, setModeState] = useState<GizmoMode>(null);
@@ -142,12 +146,15 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
     // The gizmo already moved the object live; record the final state (one version per object while you keep dragging it).
     bridge.onEdited = (e) => { setSel((s) => (s && s.name === e.name ? { ...s, ...e } : s));
       optsRef.current.record(editLine(e), `Edit ${e.name}`, { stats: null, cameras: [] }, `edit:${e.name}`); };
+    // A group drag: one version for the whole selection, coalesced while the same group keeps being dragged.
+    bridge.onEditedMany = (edits, group) => { setSel((s) => (s?.names ? { ...s, ...group } : s));
+      optsRef.current.record(groupBlock(edits.map(editLine)), `Edit ${edits.length} objects`, { stats: null, cameras: [] }, groupKey(edits.map((e) => e.name))); };
     const onKey = (e: KeyboardEvent) => {   // Esc outside text fields
       if (e.key !== "Escape" || (e.target as HTMLElement)?.closest?.("input, textarea, select")) return;
       escape();
     };
     window.addEventListener("keydown", onKey);
-    return () => { bridge.onPicked = undefined; bridge.onEdited = undefined; bridge.onKey = undefined; window.removeEventListener("keydown", onKey); };
+    return () => { bridge.onPicked = undefined; bridge.onEdited = undefined; bridge.onEditedMany = undefined; bridge.onKey = undefined; window.removeEventListener("keydown", onKey); };
   }, [bridge]);
   // A full reload (undo/redo, rebuild, chat change) replaces every object: drop the stale selection.
   useEffect(() => { setSel(null); setProps(parseSettings(optsRef.current.code)); }, [opts.reloads]);
@@ -162,7 +169,9 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
   useEffect(() => { if (!opts.enabled && bridge) { bridge.gizmo(null); setModeState(null); } }, [opts.enabled, bridge]);
 
   const setMode = async (m: GizmoMode) => { setModeState(m); await bridge?.gizmo(m); };
-  const select = async (name: string | null) => setSel((await bridge?.select(name)) ?? null);
+  /** add = Shift / Ctrl / Cmd-click: toggle an object in or out of the selection. */
+  const select = async (name: string | null, add = false) => setSel((await bridge?.select(name, add)) ?? null);
+  const selectMany = async (names: string[]) => setSel((await bridge?.selectMany(names)) ?? null);
   /** Esc: drop the selection and go back to Orbit (Higgsfield: Esc leaves the current tool / camera). */
   const escapeRef = useRef(async () => {});
   escapeRef.current = async () => { await select(null); await setMode(null); setList(null); };
@@ -170,15 +179,18 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
   const unique = (base: string, taken: Set<string>) => { let i = 1; while (taken.has(`${base}_${i}`)) i++; return `${base}_${i}`; };
   async function taken() { const o = (await bridge?.objects()) ?? []; return new Set(o.map((x) => x.name)); }
 
+  /** Duplicate / delete act on the whole selection: one version each, the copies become the new selection. */
   async function duplicate() {
     if (!sel) return;
-    const dst = unique(sel.name.replace(/_\d+$/, ""), await taken());
-    if (await run(`kit.clone('${sel.name}', '${dst}', { move: [1, 0, 0] });`, `Duplicate ${sel.name}`)) await select(dst);
+    const names = sel.names ?? [sel.name], have = await taken(), copies: string[] = [];
+    for (const n of names) { const d = unique(n.replace(/_\d+$/, ""), have); have.add(d); copies.push(d); }
+    const lines = names.map((n, i) => `kit.clone('${n}', '${copies[i]}', { move: [1, 0, 0] });`);
+    if (await run(groupBlock(lines), names.length > 1 ? `Duplicate ${names.length} objects` : `Duplicate ${sel.name}`)) await selectMany(copies);
   }
   async function remove() {
     if (!sel) return;
-    const name = sel.name;
-    if (await run(`kit.remove('${name}');`, `Delete ${name}`)) setSel(null);
+    const names = sel.names ?? [sel.name];
+    if (await run(groupBlock(names.map((n) => `kit.remove('${n}');`)), names.length > 1 ? `Delete ${names.length} objects` : `Delete ${sel.name}`)) setSel(null);
   }
   async function add(kind: string) {
     if (!bridge) return;
@@ -207,6 +219,12 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
   /** Programmatic edit (debug API / tests): same path as a gizmo drag. */
   async function editSelected(e: Partial<ObjEdit>) {
     if (!sel) throw new Error("nothing selected");
+    if (sel.names && bridge) {   // a group: pos = where its centre goes, rot / scale relative to the group as selected
+      const r = await bridge.editGroup({ pos: e.pos, rot: e.rot, scale: typeof e.scale === "number" ? e.scale : undefined });
+      if (!r.edits.length || !r.group) throw new Error("the group edit did not apply");
+      await optsRef.current.record(groupBlock(r.edits.map(editLine)), `Edit ${r.edits.length} objects`, { stats: null, cameras: [] }, groupKey(r.edits.map((x) => x.name)));
+      setSel({ ...sel, ...r.group }); return;
+    }
     const next = { name: sel.name, pos: e.pos ?? sel.pos, rot: e.rot ?? sel.rot, scale: e.scale ?? sel.scale };
     if (await run(editLine(next), `Edit ${sel.name}`, `edit:${sel.name}`)) setSel({ ...sel, ...next });
   }
@@ -216,7 +234,7 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
       <div className="edit-bar" role="toolbar" aria-label="Edit the set">
         <div className="seg">
           {([[null, "Orbit"], ["translate", "Move"], ["rotate", "Rotate"], ["scale", "Scale"]] as const).map(([m, l]) =>
-            <button key={l} aria-pressed={mode === m} onClick={() => setMode(m)} title={m ? `${l} the selected object (click it in the view)` : "Look around"}>{l}</button>)}
+            <button key={l} aria-pressed={mode === m} onClick={() => setMode(m)} title={m ? `${l} the selected object (click it in the view; Shift-click adds more)` : "Look around"}>{l}</button>)}
         </div>
         <label className="pill">Add
           <select aria-label="Add to the set" value="" onChange={(e) => { const k = e.target.value; e.target.value = ""; if (k) add(k); }}>
@@ -224,7 +242,7 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
           </select></label>
         <button className={`pill ${list ? "on" : ""}`} aria-pressed={!!list} onClick={toggleList}>Objects</button>
         <button className={`pill ${scenePanel ? "on" : ""}`} aria-pressed={scenePanel} onClick={() => setScenePanel(!scenePanel)}>Scene</button>
-        {sel && <span className="sel-chip"><b>{sel.name}</b>
+        {sel && <span className="sel-chip"><b>{sel.names ? `${sel.names.length} objects` : sel.name}</b>
           {/* Lights and cameras move and turn with the handles; only objects can be duplicated. */}
           {!/^(LGT|CAM)_/.test(sel.name) && <button className="pill" onClick={duplicate}>Duplicate</button>}
           <button className="pill" onClick={remove}>Delete</button>
@@ -274,14 +292,15 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
         </div>}
         {lib.credit && <p className="note credit">{lib.credit}</p>}
       </div>}
-      {list && <div className="obj-list" role="listbox" aria-label="Objects in the set">
-        {list.map((o) => <button key={o.name} role="option" aria-selected={sel?.name === o.name} onClick={() => select(o.name)}>
+      {list && <div className="obj-list" role="listbox" aria-multiselectable aria-label="Objects in the set">
+        {list.map((o) => <button key={o.name} role="option" aria-selected={sel?.names ? sel.names.includes(o.name) : sel?.name === o.name}
+          onClick={(e) => select(o.name, e.shiftKey || e.ctrlKey || e.metaKey)}>
           {o.category === "LGT" ? "Light: " : o.category === "CAM" ? "Camera: " : ""}{o.name}</button>)}
       </div>}
     </>
   );
   return { ui, mode, sel, props, lib: lib && { q: lib.q, n: lib.items.length, first: lib.items[0]?.name ?? null, on: lib.on },
-    acts: { setMode, select, duplicate, remove, add, toggleList, editSelected, changeProps, searchLib, openPacks: async () => { await searchLib(""); await openPacks(); },
+    acts: { setMode, select, selectMany, duplicate, remove, add, toggleList, editSelected, changeProps, searchLib, openPacks: async () => { await searchLib(""); await openPacks(); },
     placeResult: async (i = 0) => { const it = lib?.items[i]; if (!it) throw new Error("no library result"); await placeModel(it); },
     scenePanel: (on: boolean) => setScenePanel(on), setLight: (p: { color?: string; intensity?: number; on?: boolean }) => setLight(p) } };
 }

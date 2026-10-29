@@ -23,6 +23,7 @@
     "bench/browser_gl.py",
     "bench/e2e_ui.py",
     "bench/e2e_edit.py",
+    "bench/e2e_multiselect.py",
     "bench/e2e_p7.py",
     "bench/e2e_library.py",
     "bench/e2e_newscene.py",
@@ -37,6 +38,7 @@
     "bench/safe_fetch_test.mts",
     "bench/scene_code_test.mts",
     "bench/shot_intent_test.mts",
+    "bench/fps48_test.mts",
     "docs/public/"
   ],
   "exclude": [

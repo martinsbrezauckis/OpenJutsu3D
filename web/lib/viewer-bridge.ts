@@ -10,7 +10,8 @@ export type ViewerResult = { ok: boolean; error?: string; skipped: { line: numbe
   meta: Record<string, string>; cameras: string[]; size?: number[] | null; sky?: { exterior: boolean; tod: string; vacuum: boolean } };
 
 export type ObjEdit = { name: string; pos: number[]; rot: number[]; scale: number | number[] };
-export type ObjInfo = ObjEdit & { category: string; light?: { type: string; color: string; intensity: number; on: boolean } };
+/** A selection: one object / light / camera, or a group of objects (`names`, 2+; pos/rot/scale = the group gizmo). */
+export type ObjInfo = ObjEdit & { category: string; names?: string[]; light?: { type: string; color: string; intensity: number; on: boolean } };
 
 export class ViewerBridge {
   private seq = 0;
@@ -22,6 +23,8 @@ export class ViewerBridge {
   onPicked?: (info: ObjInfo | null) => void;
   /** A gizmo drag finished: record it as kit.edit(name, {pos, rot, scale}). */
   onEdited?: (e: ObjEdit) => void;
+  /** A group gizmo drag finished: every object's final state (recorded as ONE version) + the group gizmo's state. */
+  onEditedMany?: (edits: ObjEdit[], group: { pos: number[]; rot: number[]; scale: number }) => void;
   /** A key pressed while the viewport has focus (only Escape is forwarded). */
   onKey?: (key: string) => void;
   private onReady!: (moves: string[]) => void;
@@ -39,6 +42,7 @@ export class ViewerBridge {
     if (m.type === "tick") return this.onTick?.(m.i, m.n);
     if (m.type === "picked") return this.onPicked?.(m.info ?? null);
     if (m.type === "key") return this.onKey?.(m.key);
+    if (m.type === "edited" && Array.isArray(m.edits)) return this.onEditedMany?.(m.edits, m.group);
     if (m.type === "edited") return this.onEdited?.({ name: m.name, pos: m.pos, rot: m.rot, scale: m.scale });
     const w = this.waiting.get(m.id); if (!w) return;
     this.waiting.delete(m.id);
@@ -90,8 +94,25 @@ export class ViewerBridge {
   seek(cam: string | null, move?: string, i?: number, n?: number, fps = 24) {
     return this.call<{ state: unknown }>(cam === null ? { type: "seek", i: null } : { type: "seek", cam, move, i, n, fps });
   }
+  /** The shot camera's planned state at every frame (pos, lookAt, fov, roll): lib/fps48.ts measures its speed. */
+  path(cam: string, move: string, n: number, fps = 24) {
+    return this.call<{ states: { pos: number[]; lookAt: number[]; fov: number; roll: number }[] }>({ type: "path", cam, move, n, fps }).then((r) => r.states);
+  }
   async exec(code: string) { await this.ensureModels(code); return this.call<{ ok: boolean; error?: string; stats: ViewerResult["stats"]; cameras: string[] }>({ type: "exec", code }); }
-  select(name: string | null) { return this.call<{ info: ObjInfo | null }>({ type: "select", name }).then((r) => r.info); }
+  /** add = Shift/Ctrl-click: toggle `name` in / out of a group selection. */
+  select(name: string | null, add = false) { return this.call<{ info: ObjInfo | null }>({ type: "select", name, add }).then((r) => r.info); }
+  selectMany(names: string[]) { return this.call<{ info: ObjInfo | null }>({ type: "selectMany", names }).then((r) => r.info); }
+  /** Move / turn / scale the selected group as one gizmo drag (applied live; the caller records the edits). */
+  editGroup(e: { pos?: number[]; rot?: number[]; scale?: number }) {
+    return this.call<{ edits: ObjEdit[]; group: { pos: number[]; rot: number[]; scale: number } | null }>({ type: "editGroup", ...e });
+  }
+  /** Automation: page px where a click picks `name` / the gizmo handle of `axis` (null = not on screen). */
+  async locate(name: string) { return this.toPage((await this.call<{ at: number[] | null }>({ type: "locate", name })).at); }
+  async gizmoHandle(axis: "X" | "Y" | "Z") {
+    const r = await this.call<{ at: number[] | null; from: number[] | null }>({ type: "gizmoHandle", axis });
+    return r.at && r.from ? { at: this.toPage(r.at)!, from: this.toPage(r.from)! } : null;
+  }
+  private toPage(p: number[] | null) { if (!p) return null; const r = this.frame.getBoundingClientRect(); return [r.left + p[0], r.top + p[1]]; }
   gizmo(mode: "translate" | "rotate" | "scale" | null) { return this.call({ type: "gizmo", mode }); }
   objects() { return this.call<{ objects: { name: string; category: string; triangles: number }[] }>({ type: "objects" }).then((r) => r.objects); }
   viewState() { return this.call<{ pos: number[]; target: number[]; fov: number; hit: number[] | null; ground: number[] | null }>({ type: "viewState" }); }

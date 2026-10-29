@@ -9,7 +9,7 @@
  */
 import { Comfy, type Job } from "@comfyorg/sdk";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -100,6 +100,126 @@ export async function stitch(id: string, segs: [number, number][], fps: number) 
   }
   await ffmpeg([...inputs, "-filter_complex", chain.replace(/;$/, ""), "-map", "[v]", "-r", String(fps), "-c:v", "libx264", "-crf", "16",
     "-pix_fmt", "yuv420p", join(d, "render.mp4")]);
+}
+/** Frame count, rate and size of a video's first stream (packets counted: the mp4 header's nb_frames can be absent). */
+export function probeVideo(file: string): Promise<{ w: number; h: number; n: number; fps: string; secs: number }> {
+  return new Promise((resolve, reject) => {
+    const p = spawn("ffprobe", ["-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries",
+      "stream=width,height,r_frame_rate,nb_read_packets:format=duration", "-of", "json", file], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = ""; p.stdout.on("data", (b) => { out += b; }); p.on("error", reject);
+    p.on("close", (c) => {
+      try { if (c !== 0) throw new Error(`ffprobe ${c}`); const j = JSON.parse(out), s = j.streams[0];
+        resolve({ w: s.width, h: s.height, n: Number(s.nb_read_packets), fps: s.r_frame_rate, secs: Number(j.format.duration) }); }
+      catch (e) { reject(e); }
+    });
+  });
+}
+/**
+ * 48 fps copy of a finished render (render.mp4 → render48.mp4; the 24 fps original is kept), 2n−1 frames at 48/1:
+ * frame i of the original = frame 2i of the copy (the timing of RIFE / LTX temporal x2). Two ways, best first:
+ *  1. ComfyUI's core frame interpolation (FrameInterpolate, RIFE/FILM) on the connected ComfyUI, when it offers a model
+ *     (seconds on a GPU). Availability is asked by a PROBE: interpGraph with a video and a model name that cannot exist
+ *     is submitted; ComfyUI validates before queueing and answers 422 either "Node 'FrameInterpolate' not found" or
+ *     "model_name not in [<the installed models>]" — the probe never runs, and the answer lists the models. (The v2
+ *     API / comfy-api-proxy has no /object_info, so asking is the portable check.)
+ *  2. ffmpeg minterpolate (mci) on the app server — no GPU, no model; within ~1.7 dB PSNR of RIFE 4.25 on real renders
+ *     (10-29, every 2nd frame dropped and rebuilt), ~0.23 s per output frame at 1920×1088 on one core.
+ * Any ComfyUI failure falls back to 2. render48.json records {method, model?, ms, why?, fixed?}. Written under a temp
+ * name and renamed (a half-written copy is never served); one job per shot; a copy older than render.mp4 is made again.
+ */
+export const INTERP_NODE = { load: "1", parts: "2", model: "3", interp: "4", video: "5", save: "6" } as const;
+export function interpGraph(file: unknown, model: string, prefix: string): Graph {
+  const N = INTERP_NODE;
+  return {
+    [N.load]: { class_type: "LoadVideo", inputs: { file } },
+    [N.parts]: { class_type: "GetVideoComponents", inputs: { video: [N.load, 0] } },
+    [N.model]: { class_type: "FrameInterpolationModelLoader", inputs: { model_name: model } },
+    [N.interp]: { class_type: "FrameInterpolate", inputs: { interp_model: [N.model, 0], images: [N.parts, 0], multiplier: 2 } },
+    [N.video]: { class_type: "CreateVideo", inputs: { images: [N.interp, 0], fps: 48, audio: [N.parts, 1] } },   // source audio, if any
+    [N.save]: { class_type: "SaveVideo", inputs: { video: [N.video, 0], filename_prefix: prefix, format: "auto", "format.codec": "auto" } },
+  };
+}
+/** The models ComfyUI listed for the probe's model loader; null = no answer about it (node missing, other error). */
+export function interpOptions(err: unknown): string[] | null {
+  type E = { details?: string; extra_info?: { input_name?: string; input_config?: unknown[] } };
+  const ne = (err as { details?: { node_errors?: Record<string, { errors?: E[] }> } } | null)?.details?.node_errors?.[INTERP_NODE.model];
+  const e = ne?.errors?.find((x) => x.extra_info?.input_name === "model_name");
+  if (!e) return null;
+  const cfg = e.extra_info?.input_config, opts = Array.isArray(cfg?.[0]) ? cfg[0] : (cfg?.[1] as { options?: unknown } | undefined)?.options;
+  if (Array.isArray(opts)) return opts.map(String);
+  const m = /not in \[(.*)\]/.exec(e.details ?? ""); return m ? Array.from(m[1].matchAll(/'([^']*)'/g), (x) => x[1]) : null;
+}
+export const pickInterpModel = (opts: string[]) => opts.find((o) => /rife/i.test(o)) ?? opts[0] ?? null;
+const PROBE = "__o3j_probe__";
+let probed: { at: number; model: string | null; why: string } | null = null;
+/** The ComfyUI frame-interpolation model to use, or null + why not. Definite answers are kept 10 min. */
+export async function interpModel(): Promise<{ model: string | null; why: string }> {
+  if (process.env.O3J_INTERP === "ffmpeg") return { model: null, why: "O3J_INTERP=ffmpeg" };
+  if (probed && Date.now() - probed.at < 600_000) return probed;
+  const api = client();
+  try {
+    const j = await api.submit(api.workflows.fromJson(interpGraph(`${PROBE}.mp4`, PROBE, `o3j48/${PROBE}`)));
+    await j.cancel().catch(() => {});   // cannot validate (no such video or model); cancel if a surface queued it anyway
+    return { model: null, why: "the ComfyUI probe was not rejected" };
+  } catch (e) {
+    const opts = interpOptions(e), msg = String((e as Error)?.message ?? e).slice(0, 200), model = opts && pickInterpModel(opts);
+    const r = { model: model ?? null, why: model ? `ComfyUI model ${model}` : opts ? "ComfyUI has no frame interpolation model" : `ComfyUI: ${msg}` };
+    if (opts || (e as { code?: string })?.code === "invalid_workflow") probed = { at: Date.now(), ...r };   // not a network hiccup
+    return r;
+  }
+}
+/** RIFE in ComfyUI → raw (downloaded) file. Only THIS job's SaveVideo output with this job's prefix counts. */
+async function interpComfy(id: string, src: string, model: string, raw: string) {
+  const api = client(), tag = `${id}_${randomUUID().slice(0, 8)}`;
+  const file = await api.assets.fromBytes(new Uint8Array(await readFile(src)), { filename: `${id}_render.mp4`, contentType: "video/mp4" });
+  const job = await api.submit(api.workflows.fromJson(interpGraph(file, model, `o3j48/${tag}`)));
+  const waitMin = Number(process.env.O3J_INTERP_WAIT_MIN) || 40;   // the queue may hold a 25 min LTX render
+  try { await job.wait(waitMin * 60_000); } catch (e) { await job.cancel().catch(() => {}); throw e; }
+  if (job.status !== "succeeded") throw new Error(`ComfyUI job ${job.status}${job.error ? `: ${JSON.stringify(job.error).slice(0, 200)}` : ""}`);
+  const o = job.getOutputs(INTERP_NODE.save).find((x) => x.name.includes(tag));
+  if (!o) throw new Error(`ComfyUI job has no output named ${tag} (${job.outputs.map((x) => x.name).join(", ")})`);
+  await o.toFile(raw);
+}
+export type Made48 = { file: string; method: "comfy" | "ffmpeg" | "unknown"; model?: string; ms?: number; why?: string; fixed?: string };
+const making48 = new Map<string, Promise<Made48>>();
+export function make48(id: string): Promise<Made48> {
+  const d = shotDir(id), out = join(d, "render48.mp4"), meta = join(d, "render48.json");
+  if (making48.has(id)) return making48.get(id)!;   // one job per shot (a second call joins it)
+  const job = (async (): Promise<Made48> => {
+    const src = join(d, "render.mp4"), tmp = join(d, "render48.part.mp4"), raw = join(d, "render48.comfy.mp4");
+    const mtime = (f: string) => stat(f).then((x) => x.mtimeMs, () => -1);
+    const [ts, to] = await Promise.all([mtime(src), mtime(out)]);
+    if (ts < 0) throw new Error("the shot has no finished render yet");
+    if (to >= ts) return { method: "unknown", ...JSON.parse(await readFile(meta, "utf8").catch(() => "{}")), file: out };
+    const { n, w, h } = await probeVideo(src); if (!(n >= 2)) throw new Error("the render has no frames to interpolate");
+    const t0 = Date.now(); let r: Omit<Made48, "file" | "ms"> | null = null, why: string;
+    // fp32 frames in ComfyUI's RAM: n in + 2n−1 out (+ the encode); long shots stay on ffmpeg
+    const gb = ((3 * n - 1) * w * h * 12) / 1e9, maxGb = Number(process.env.O3J_INTERP_MAX_GB) || 16;
+    const pick = gb > maxGb ? { model: null, why: `${gb.toFixed(0)} GB of frames > ${maxGb} GB for ComfyUI` } : await interpModel();
+    why = pick.why;
+    if (pick.model) try {
+      await interpComfy(id, src, pick.model, raw);
+      const p = await probeVideo(raw);
+      if (p.w !== w || p.h !== h) throw new Error(`ComfyUI output is ${p.w}x${p.h}, not ${w}x${h}`);
+      // exact 2n−1 frames at 48/1 (pad by cloning / cut); otherwise a stream copy just moves the index to the front
+      const exact = p.n === 2 * n - 1 && p.fps === "48/1", fixed = exact ? undefined : `${p.n} f at ${p.fps} → ${2 * n - 1} f at 48/1`;
+      await ffmpeg(exact ? ["-i", raw, "-map", "0", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", tmp]
+        : ["-i", raw, "-vf", "fps=48,tpad=stop_mode=clone:stop=2", "-frames:v", String(2 * n - 1), "-c:v", "libx264", "-crf", "16",
+          "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", "-f", "mp4", tmp]);
+      r = { method: "comfy", model: pick.model, ...(fixed ? { fixed } : {}) };
+    } catch (e) { why = `ComfyUI failed, used ffmpeg: ${String((e as Error)?.message ?? e).slice(0, 300)}`; }
+    finally { await rm(raw, { force: true }); }
+    if (!r) {
+      await ffmpeg(["-i", src, "-vf", "tpad=stop_mode=clone:stop=2,minterpolate=fps=48:mi_mode=mci", "-frames:v", String(2 * n - 1),
+        "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", tmp]);
+      r = { method: "ffmpeg", why };
+    }
+    const made = { ...r, ms: Date.now() - t0 };
+    await writeFile(meta, JSON.stringify(made)); await rename(tmp, out);   // meta first: render48.mp4 never shows stale meta
+    return { ...made, file: out };
+  })().finally(() => making48.delete(id));
+  making48.set(id, job);
+  return job;
 }
 /** One rendered frame of segment k (PNG bytes): the style reference for segment k+1's look still. */
 export async function segmentFrame(id: string, k: number, frame: number): Promise<Uint8Array> {

@@ -17,6 +17,7 @@ import { useEditTools, type RecordEdit } from "./EditTools";
 import { ViewerBridge, type ViewerResult } from "@/lib/viewer-bridge";
 import { joinCode } from "@/lib/scene-code";
 import { shotIntent } from "@/lib/shot-intent";
+import { FAST_MOTION, peakMotion } from "@/lib/fps48";
 
 type Use = { route: string; model: string };
 type Opt = { id: string; label: string; note?: string };
@@ -29,11 +30,12 @@ type Msg =
   | { kind: "user"; text: string; ref?: string }
   | { kind: "note"; text: string; detail?: string[] }
   | { kind: "questions"; questions: Question[] }
+  | { kind: "confirm"; request: string; answer?: "apply" | "cancel" }
   | { kind: "concept"; url: string }
   | { kind: "build"; batches: string[]; at: number; current: number; done: boolean }
   | { kind: "render"; label: string; steps: Record<RStep, "wait" | "now" | "done">; look?: string }
   | { kind: "error"; text: string };
-type Take = { id: string; label: string; video: string; clay: string; thumb?: string };
+type Take = { id: string; label: string; video: string; clay: string; thumb?: string; video48?: string; by48?: string };
 type Version = { code: string; note: string; at: string };
 type SceneCard = { id: string; title: string; updated: string };
 
@@ -53,7 +55,7 @@ function pathKeys(code: string, cam: string | null): number[][] {
 }
 const CHAT_MODES = { auto: "Auto", ask: "Ask first", go: "Don't ask", chat: "Chat only" } as const;
 const CHAT_MODE_HELP: Record<keyof typeof CHAT_MODES, string> = { auto: "Auto: ask only when the idea is unclear",
-  ask: "Ask first: questions before building", go: "Don't ask: decide and build", chat: "Chat only: answers, no changes" };
+  ask: "Ask first: questions before building, and every change waits for your OK", go: "Don't ask: decide and build", chat: "Chat only: answers, no changes" };
 const ROUTE_LABEL: Record<string, string> = { router: "Comfy Router (credits)", codex: "Codex CLI (your subscription)", openai: "OpenAI API (your key)" };
 const ROUTE_NOTE: Record<string, string> = { router: "Model calls are charged to your Comfy credits.", codex: "Runs on your Codex subscription.",
   openai: "Model calls are charged to your OpenAI API key." };
@@ -161,6 +163,10 @@ export default function Studio() {
   const [cam, setCam] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [recipe, setRecipe] = useState<{ move: string; seconds: number }[]>([{ move: "dolly-in", seconds: 4 }]);
+  // 48 fps copy: auto-on when the shot's camera moves fast (lib/fps48.ts measures the planned path); the user's
+  // choice (fps48User) holds until the camera or the move changes.
+  const [motion, setMotion] = useState<number | null>(null);
+  const [fps48User, setFps48User] = useState<boolean | null>(null);
   const [renderSoon, setRenderSoon] = useState(false);   // "film it" in chat: render once the new shot is in state
   const [sel, setSel] = useState(0);
   const [playhead, setPlayhead] = useState<number | null>(null);
@@ -173,6 +179,7 @@ export default function Studio() {
   const lastEdit = useRef<{ key: string; block: string } | null>(null);
   const seconds = recipe.reduce((s, r) => s + r.seconds, 0);
   const recipeStr = recipe.length === 1 && recipe[0].seconds === 4 ? recipe[0].move : recipe.map((r) => `${r.move}:${r.seconds}`).join("+");
+  const fps48Auto = motion !== null && motion > FAST_MOTION, fps48On = fps48User ?? fps48Auto;
   const use = (stage: "director" | "builder" | "look"): Use | undefined => {
     if (!config) return undefined;
     if (stage === "builder") return builderUse ?? config.defaults.builder ?? undefined;
@@ -313,6 +320,7 @@ export default function Studio() {
     if (built && shotOnly(text)) return;
     // A built set always takes the text as a change — also when it has no saved plan (sets saved before 10-29 lost
     // theirs, and a saved example has none); only an empty studio starts a new set.
+    if (built && chatMode === "ask") { push({ kind: "confirm", request: text }); return; }
     if (built) await change(text);
     else if (!brief) { setPrompt(text); setTitle(text.slice(0, 60)); await direct(text); }
     // Plan ready, set not built yet (concept step): the text revises the plan, then a new concept is shown.
@@ -419,6 +427,13 @@ export default function Studio() {
     } catch (e) { push({ kind: "error", text: `Building stopped: ${(e as Error).message}` }); }
     finally { setBusy(null); }
   }
+  /** Ask first: the user's answer on the last confirm card (Apply → the change runs; Cancel → nothing changes). */
+  async function confirmChange(apply: boolean) {
+    const i = msgs.map((m) => m.kind).lastIndexOf("confirm"); const m = msgs[i] as Extract<Msg, { kind: "confirm" }> | undefined;
+    if (!m || m.answer || busy) return;
+    setMsgs((x) => x.map((y, k) => (k === i ? { ...m, answer: apply ? "apply" : "cancel" } : y)));
+    if (apply) await change(m.request); else push({ kind: "note", text: "Okay, nothing changed." });
+  }
   async function change(request: string) {
     setBusy("Changing the set");
     try {
@@ -496,7 +511,13 @@ export default function Studio() {
         }
       }
       if (long) { setBusy("Joining the parts"); video = (await api<{ video: string }>(`/api/shots/${id}/stitch`, { json: { n, fps } })).video; }
-      const take = { id, label: shotLabel, video, clay: `/api/shots/${id}/file/clay.mp4`, thumb: firstLook };
+      const take: Take = { id, label: shotLabel, video, clay: `/api/shots/${id}/file/clay.mp4`, thumb: firstLook };
+      if (fps48On) {   // a failed 48 fps copy never costs the take: the 24 fps video is already saved
+        setBusy("Making the 48 fps version");
+        try { const r = await api<{ video48: string; method: string; model?: string }>(`/api/shots/${id}/fps48`, { json: {} });
+          take.video48 = r.video48; take.by48 = r.method === "comfy" ? `ComfyUI ${r.model ?? ""}`.trim() : r.method; }
+        catch (e) { push({ kind: "error", text: `The 48 fps version failed (${(e as Error).message}); the 24 fps video is kept.` }); }
+      }
       failedRender.current = null;
       steps({ look: "done", video: "done" }); const tk = [...takes, take]; setTakes(tk); setShowing({ take, mode: "final" }); await save({ t: tk });
     } catch (e) {
@@ -542,6 +563,13 @@ export default function Studio() {
     try { await bridge.current.seek(cam, recipeStr, Math.round(t * 24), frameCount(seconds, 24), 24); } finally { seeking.current = false; }
   }
   useEffect(() => { setPark(null); bridge.current?.seek(null); }, [cam, recipeStr]);   // a new shot unparks
+  useEffect(() => { setFps48User(null); }, [cam, recipeStr]);
+  useEffect(() => {   // the set (head) and the frame format change the path / the measure too
+    let live = true; setMotion(null);
+    if (cam && viewerReady && built) bridge.current?.path(cam, recipeStr, frameCount(seconds, 24), 24)
+      .then((st) => { if (live) setMotion(peakMotion(st, SIZE.w / SIZE.h)); }).catch(() => {});
+    return () => { live = false; };
+  }, [cam, recipeStr, seconds, viewerReady, built, head, aspect]);   // eslint-disable-line react-hooks/exhaustive-deps
   async function downloadStill() {
     if (!cam || !bridge.current) return;
     const [f] = await bridge.current.frames({ cam, move: recipeStr, n: frameCount(seconds, 24), fps: 24, w: SIZE.w, h: SIZE.h, mode, start: 0, count: 1 });
@@ -633,6 +661,7 @@ export default function Studio() {
       aspect: (a: Aspect) => { if (!(a in ASPECTS)) throw new Error(`no aspect ${a}`); setAspect(a); },   // reference picture as a data: URL (null = remove)
       chat: (text: string) => setInput(text), send,
       answer: (qid: string, option: string) => setAnswers((a) => ({ ...a, [qid]: option })),
+      confirmChange: (apply: boolean) => confirmChange(apply),
       continueQuestions: () => { const q = [...msgs].reverse().find((m) => m.kind === "questions") as Extract<Msg, { kind: "questions" }> | undefined;
         if (!q) throw new Error("no questions"); return direct(prompt, Object.fromEntries(q.questions.map((x) => [x.id, answers[x.id] ?? x.default]))); },
       buildThis: () => build(), concept: (on: boolean) => setConceptOn(!!on),
@@ -644,7 +673,8 @@ export default function Studio() {
       select: (i: number) => setSel(i), preview, render: () => renderShot(), resumeRender: (id: string) => renderShot(id), undo: () => goto(head - 1), redo: () => goto(head + 1), version: (h: number) => goto(h),
       mode: (m: "lit" | "clay") => { setMode(m); return bridge.current?.mode(m); },
       showTake: (i: number, m: "final" | "clay" | "side" = "final") => { const tk = takes[i]; if (tk) setShowing({ take: tk, mode: m }); },
-      editMode: (m: "translate" | "rotate" | "scale" | null) => edit.acts.setMode(m), selectObject: (n: string | null) => edit.acts.select(n),
+      editMode: (m: "translate" | "rotate" | "scale" | null) => edit.acts.setMode(m), selectObject: (n: string | null, add = false) => edit.acts.select(n, !!add),
+      selectMany: (names: string[]) => edit.acts.selectMany(names),
       editSelected: (e: { pos?: number[]; rot?: number[]; scale?: number }) => edit.acts.editSelected(e),
       duplicate: () => edit.acts.duplicate(), deleteSelected: () => edit.acts.remove(), addThing: (k: string) => edit.acts.add(k),
       objectsPanel: () => edit.acts.toggleList(), scenePanel: (on: boolean) => edit.acts.scenePanel(on), setLight: (p: { color?: string; intensity?: number; on?: boolean }) => edit.acts.setLight(p),
@@ -652,14 +682,18 @@ export default function Studio() {
       chatMode: (m: "auto" | "ask" | "go" | "chat") => setChatMode(m),
       library: (q: string) => edit.acts.searchLib(q), placeResult: (i = 0) => edit.acts.placeResult(i),
       packs: () => edit.acts.openPacks(),
+      highFps: (on: boolean | null) => setFps48User(on),   // the 48 fps pill; null = back to automatic
       backToSet: () => setShowing(null), still: downloadStill, glb: (as: "lit" | "clay" = "lit") => downloadGLB(as),
     };
     (window as any).__o3j = {
       act: Object.fromEntries(Object.entries(acts).map(([k, f]) => [k, wrap(k, f)])),
-      state: () => ({ view, title, busy, scenes: scenes.map((s) => ({ id: s.id, title: s.title })), built, viewerReady, sceneId, head, versions: versions.length, notes: versions.map((v) => v.note), edit: { mode: edit.mode, sel: edit.sel?.name ?? null, light: edit.sel?.light ?? null, note: versions[head]?.note, props: edit.props, lib: edit.lib }, chatMode, thumbs: Object.keys(thumbs), scene: scene && { stats: scene.stats, cameras: scene.cameras, skipped: scene.skipped.length, floating: scene.floating ?? [] },
-        cam, recipe, sel, playhead, park, keys: keys.length, keyTimes: keys.map((k) => k[7] ?? null), takes: takes.map((x) => x.label), showing: showing && { take: showing.take.label, mode: showing.mode },
+      state: () => ({ view, title, busy, scenes: scenes.map((s) => ({ id: s.id, title: s.title })), built, viewerReady, sceneId, head, versions: versions.length, notes: versions.map((v) => v.note), edit: { mode: edit.mode, sel: edit.sel?.name ?? null, names: edit.sel?.names ?? null, pos: edit.sel?.pos ?? null, rot: edit.sel?.rot ?? null, scale: edit.sel?.scale ?? null, light: edit.sel?.light ?? null, note: versions[head]?.note, props: edit.props, lib: edit.lib }, chatMode, thumbs: Object.keys(thumbs), scene: scene && { stats: scene.stats, cameras: scene.cameras, skipped: scene.skipped.length, floating: scene.floating ?? [] },
+        cam, recipe, sel, playhead, park, keys: keys.length, keyTimes: keys.map((k) => k[7] ?? null), takes: takes.map((x) => x.label), takes48: takes.filter((x) => x.video48).map((x) => ({ id: x.id, by: x.by48 })), fps48: { on: fps48On, auto: fps48Auto, user: fps48User, motion }, showing: showing && { take: showing.take.label, mode: showing.mode },
         model: builderUse ?? config?.defaults.builder, routes: config?.routes, msgs: msgs.map((m) => ({ kind: m.kind, text: "text" in m ? m.text : undefined })) }),
       log: () => dbgLog.current.slice(-200),
+      // bench/debug_api.py /click and /drag: page px of an object (a spot where a click picks it) / of a gizmo handle
+      locate: (name: string) => bridge.current?.locate(name) ?? null,
+      gizmoHandle: (axis: "X" | "Y" | "Z" = "X") => bridge.current?.gizmoHandle(axis) ?? null,
     };
   });
 
@@ -752,6 +786,11 @@ export default function Studio() {
                     <div className="options">{q.options.map((o) => <button key={o} aria-pressed={(answers[q.id] ?? q.default) === o} onClick={() => setAnswers({ ...answers, [q.id]: o })}>{o}</button>)}</div></div>))}
                   <div className="row"><button className="action" disabled={!!busy} onClick={() => direct(prompt, Object.fromEntries(m.questions.map((q) => [q.id, answers[q.id] ?? q.default])))}>Continue</button></div>
                 </div>);
+              if (m.kind === "confirm") return (
+                <div key={i} className="msg bot">Change the set: “{m.request}”?
+                  {m.answer ? <span className="caption">{m.answer === "apply" ? "Applied." : "Cancelled."}</span>
+                    : <div className="row"><button className="action" disabled={!!busy} onClick={() => confirmChange(true)}>Apply change</button>
+                      <button className="ghost" disabled={!!busy} onClick={() => confirmChange(false)}>Cancel</button></div>}</div>);
               if (m.kind === "concept") return (
                 <div key={i} className="msg bot"><img className="wide" src={m.url} alt="Concept picture" /><span className="caption">Concept picture. The built set will differ in details.</span>
                   {!built && !busy && i === msgs.length - 1 && <div className="row"><button className="action" onClick={() => build()}>Build this set</button>
@@ -785,7 +824,7 @@ export default function Studio() {
         <main className="stage">
           <div className="viewer">
             <div className="screen">
-              {showing && showing.mode !== "side" && <video key={showing.mode + showing.take.id} src={showing.mode === "final" ? showing.take.video : showing.take.clay} autoPlay loop muted playsInline controls />}
+              {showing && showing.mode !== "side" && <video key={showing.mode + showing.take.id} src={showing.mode === "final" ? showing.take.video48 ?? showing.take.video : showing.take.clay} autoPlay loop muted playsInline controls />}
               <iframe ref={iframe} title="3D set" src="/scenekit/studio.html" sandbox="allow-scripts"
                 style={{ visibility: showing && showing.mode !== "side" ? "hidden" : "visible", width: showing?.mode === "side" ? "50%" : "100%" }} />
               {showing?.mode === "side" && <video src={showing.take.video} autoPlay loop muted playsInline style={{ left: "50%", width: "50%" }} />}
@@ -813,10 +852,13 @@ export default function Studio() {
                   {[1, 2, 3, 4, 5, 6, 8, 10, 12, 15].map((s) => <option key={s} value={s} disabled={total - (recipe[sel]?.seconds ?? 0) + s > MAX_SECONDS}>{s} s</option>)}</select></label>
               <button className="pill" disabled={total >= MAX_SECONDS} onClick={() => { setRecipe([...recipe, { move: "arc-left", seconds: Math.min(4, MAX_SECONDS - total) }]); setSel(recipe.length); }}>{Icon.plus}Add move</button>
               {aspectChip(takes.length > 0)}
+              <button className={`pill ${fps48On ? "on" : ""}`} aria-pressed={fps48On} onClick={() => setFps48User(!fps48On)}
+                title={`Also make a 48 fps copy (the 24 fps video is kept)${fps48Auto ? ": on by itself for this fast move" : ""}`}>48 fps</button>
               <span className="grow" />
               <button className="ghost" disabled={!cam} onClick={downloadStill}>Still</button>
               <button className="ghost" disabled={!scene} title="3D set with materials and textures (Blender, Unreal, Unity); Shift-click for geometry only" onClick={(e) => downloadGLB(e.shiftKey ? "clay" : "lit")}>GLB</button>
               {showing && <a className="ghost" href={showing.take.video} download>Video</a>}
+              {showing?.take.video48 && <a className="ghost" href={showing.take.video48} download title={showing.take.by48 && `Made with ${showing.take.by48}`}>48 fps</a>}
               <button className="action" disabled={!built || !cam || total > MAX_SECONDS || !!busy} onClick={() => renderShot()} title={total > 15 ? "Longer than 15 s: rendered in parts and joined" : undefined}>Render shot</button>
             </div>
 

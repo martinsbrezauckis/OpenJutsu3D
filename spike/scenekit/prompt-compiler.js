@@ -46,6 +46,7 @@ const ACTION_PHRASE = { idle: 'standing', walk: 'walking', walk_formal: 'walking
   torch: 'holding a torch', kneel_fix: 'kneeling at work', swim: 'swimming', wave: 'waving', run: 'running', fight: 'fighting',
   jump: 'jumping', point: 'pointing', clap: 'clapping', read: 'reading', drink: 'drinking', type: 'typing', phone: 'on the phone' };
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+const PERSON = /\b(\w*(er|or|ist|man|men|woman|women|ian|ant|ent|naut|ess)|person|people|child|children|kid|guy|girl|boy|lady|maid|patron|guest|friend|couple|monk|priest|knight|guard|crowd|figure|chef|cook|staff|elder|youth|teen|baby|family|nun|pilot|clerk|host|hero|thief|bride|groom|soldier|cowboy|ninja|samurai|robot|android|alien|zombie|ghost|witch|wizard|king|queen|prince|princess|nurse|chief|captain|tourist|pedestrian|passerby|vendor|cyclist|athlete|student|scientist|artist|musician|dancer|police|officer|detective|spy)s?\b/;
 
 export function compilePrompt(meta0, visible, move, maxItems = 5) {
   const meta = Object.fromEntries(Object.entries(meta0 || {}).map(([k, v]) => [k, typeof v === 'string' ? clean(v) : v]));
@@ -58,8 +59,11 @@ export function compilePrompt(meta0, visible, move, maxItems = 5) {
   const people = new Map();
   for (const v of visible) {
     if (v.category !== 'CHAR' || v.cover < 0.0005) continue;
-    const w = words(v.name), act = v.action && ACTION_PHRASE[v.action];
+    let w = words(v.name); const act = v.action && ACTION_PHRASE[v.action];
     if (!w) continue;
+    // an imported character is named after its file ("Remy" from Mixamo): "a remy waving" means nothing to the video
+    // model, "a person called Remy waving" does (10-29). Role words (maid, innkeeper, astronaut…) stay as they are.
+    if (!PERSON.test(w)) w = w.includes(' ') ? `${w} person` : `person called ${cap(w)}`;
     const key = `${w}|${act || ''}`, e = people.get(key) || { w, act, action: v.action, n: 0 }; e.n++; people.set(key, e);
   }
   const NUM = ['', 'a', 'two', 'three', 'four', 'five', 'six'];
@@ -69,7 +73,7 @@ export function compilePrompt(meta0, visible, move, maxItems = 5) {
     // plural on the noun: the first word that is a person noun, else the last word ("traveller" → "travellers")
     if (e.n > 1) { const i = head.findIndex((x) => /(er|or|ist|man|woman|ian|ant|ent|child|guest|patron|maid|girl|boy|friend|couple|monk|priest|knight|guard)$/.test(x)); const k = i >= 0 ? i : last;
       head[k] = /man$/.test(head[k]) ? head[k].replace(/man$/, 'men') : /child$/.test(head[k]) ? head[k] + 'ren' : head[k] + 's'; }
-    things.push(`${e.n > 1 ? NUM[Math.min(e.n, 6)] || 'several' : 'a'} ${head.join(' ')}${actWord}`);
+    things.push(`${e.n > 1 ? NUM[Math.min(e.n, 6)] || 'several' : /^[aeiou]/.test(head[0]) ? 'an' : 'a'} ${head.join(' ')}${actWord}`);
     seen.add(e.w);
   }
   for (const v of visible) {

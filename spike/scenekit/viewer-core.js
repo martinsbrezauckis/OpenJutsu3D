@@ -399,7 +399,10 @@ export async function createViewer({ container = document.body, width = 1280, he
       : Array.from({ length: n }, (_, i) => cameraAt(move, start, n > 1 ? i / (n - 1) : 0, { amount, seconds: (n - 1) / fps }));
     // Wall avoidance is an INTERIOR concept: outdoors the look-at target is often inside a building (a cathedral), so a
     // target→camera ray would drag the camera into it (city flyover, 10-18). Exteriors fly free, ≥ 1.5 m above floor.
-    const f = skyInfo.exterior ? raw.map(() => 1) : raw.map(freeFraction), win = Math.max(1, Math.round(n / 12));
+    // a frame whose camera has not left the start pose (pans, tilts, zooms: only the look-at moves) keeps it — the
+    // look-at point swinging into a wall must not drag the camera after it (tavern whip-pan jumped, 10-29)
+    const still = (st) => Math.hypot(...st.pos.map((x, k) => x - start.pos[k])) < 1e-3;
+    const f = skyInfo.exterior ? raw.map(() => 1) : raw.map((st) => (still(st) ? 1 : freeFraction(st))), win = Math.max(1, Math.round(n / 12));
     if (skyInfo.exterior) for (const st of raw) st.pos[1] = Math.max(st.pos[1], box.min.y + 1.5);
     const mins = f.map((_, i) => Math.min(...f.slice(Math.max(0, i - win), i + win + 1)));
     const smooth = mins.map((_, i) => { const s = mins.slice(Math.max(0, i - win), i + win + 1); return s.reduce((a, b) => a + b, 0) / s.length; });
@@ -537,9 +540,48 @@ export async function createViewer({ container = document.body, width = 1280, he
 
   // ---- Hands-on editing (app): pick, gizmo, live code blocks. Edits are recorded by the app as kit.edit/clone/remove
   // lines, so the scene code stays the single source of truth (undo, save, chat changes all see them). ----
-  let gizmo = null, proxy = null, selBox = null, selName = null, gizmoMode = null;
+  // Selection = selNames (selName = the last one picked). Several names = a group of OBJECTS only: lights and cameras
+  // have no size and turn about their own position, so moving / turning / scaling them as part of a group has no clear
+  // meaning. Picking a light or camera (with or without Shift) selects it alone; Shift-picking an object while a light
+  // or camera is selected starts a new object selection.
+  let gizmo = null, proxy = null, selBoxes = [], selNames = [], selName = null, gizmoMode = null, dragFrom = null;
   const listeners = { pick: () => {}, edit: () => {} };
   const objectGroups = () => kit ? kit.root.children.filter(o => o.userData.kind === 'object') : [];
+  const round = (v, k = 1000) => Math.round(v * k) / k;
+  const isGroup = () => selNames.length > 1;
+  const editOf = (o) => o.userData.edit || { pos: o.userData.pivot, rot: [0, 0, 0], scale: 1 };
+  const proxyState = () => {
+    const r = new THREE.Euler().setFromQuaternion(proxy.quaternion, 'XYZ');
+    return { pos: proxy.position.toArray().map(v => round(v)), rot: [r.x, r.y, r.z].map(v => round(v / DEG2, 10)), scale: round(proxy.scale.x, 100) };
+  };
+  // Uniform scale only: take the axis the user dragged furthest (edit() keeps objects undistorted).
+  function uniformScale(prev) {
+    const s = [proxy.scale.x, proxy.scale.y, proxy.scale.z].reduce((a, v) => Math.abs(v - prev) > Math.abs(a - prev) ? v : a, prev);
+    proxy.scale.setScalar(s); return s;
+  }
+  /** Group drag start: the gizmo's proxy and every selected object's edit state as they are now. */
+  function beginGroup() {
+    proxy.updateMatrix();
+    dragFrom = { m: proxy.matrix.clone(), q: proxy.quaternion.clone(), s: proxy.scale.x, moved: false,
+      items: selNames.map(n => ({ name: n, ...editOf(kit.root.getObjectByName(n)) })) };
+  }
+  /** The proxy's change since beginGroup(), G = proxy now · (proxy at start)⁻¹, applied to every object: G moves each
+   *  object's centre, the same turn adds to its rotation and the same factor multiplies its scale (uniform, so it
+   *  commutes with the turn) — kit.edit's pos / rot / scale about the object's centre express that exactly. */
+  function applyGroup() {
+    proxy.updateMatrix();
+    const G = proxy.matrix.clone().multiply(dragFrom.m.clone().invert());
+    const dq = proxy.quaternion.clone().multiply(dragFrom.q.clone().invert()), k = proxy.scale.x / dragFrom.s;
+    for (const it of dragFrom.items) {
+      const p = new THREE.Vector3(...it.pos).applyMatrix4(G);
+      const r = new THREE.Euler().setFromQuaternion(dq.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(...it.rot.map(v => v * DEG2)))), 'XYZ');
+      const sc = (v) => round(Math.max(0.05, v * k), 100);
+      kit.edit(it.name, { pos: p.toArray().map(v => round(v)), rot: [r.x, r.y, r.z].map(v => round(v / DEG2, 10)), scale: Array.isArray(it.scale) ? it.scale.map(sc) : sc(it.scale) });
+    }
+    dragFrom.moved = true;
+    selBoxes.forEach(b => b.update?.());
+  }
+  const groupEdits = () => ({ edits: selNames.map(n => ({ name: n, ...editOf(kit.root.getObjectByName(n)) })), group: proxyState() });
   function ensureGizmo() {
     if (gizmo) return;
     proxy = new THREE.Object3D(); uiLayer.add(proxy);
@@ -547,73 +589,137 @@ export async function createViewer({ container = document.body, width = 1280, he
     gizmo.addEventListener('change', () => { needsRender = true; });   // hover highlight, drags
     gizmo.addEventListener('dragging-changed', (e) => {
       if (controls) controls.enabled = !e.value;
+      // A group drag = ONE edit event carrying every object's final state (the app records it as one version).
+      if (isGroup()) { if (e.value) beginGroup(); else if (dragFrom) { const moved = dragFrom.moved; dragFrom = null; if (moved) listeners.edit(groupEdits()); } return; }
       if (!e.value && selName) { const o = kit.root.getObjectByName(selName); if (o?.userData.edit) listeners.edit({ name: selName, ...o.userData.edit }); }
     });
     gizmo.addEventListener('objectChange', () => {
       if (!selName) return;
+      if (isGroup()) { if (dragFrom) { uniformScale(dragFrom.s); applyGroup(); } return; }
       const r = new THREE.Euler().setFromQuaternion(proxy.quaternion, 'XYZ');
-      const round = (v, k = 1000) => Math.round(v * k) / k;
-      // Uniform scale only: take the axis the user dragged furthest (edit() keeps objects undistorted).
       // Lights and cameras have no size: their scale stays 1.
       const sel = kit.root.getObjectByName(selName), aimOnly = sel.userData.kind !== 'object';
       if (aimOnly) proxy.scale.setScalar(1);
-      const prev = sel.userData.edit?.scale ?? 1;
-      const s = [proxy.scale.x, proxy.scale.y, proxy.scale.z].reduce((a, v) => Math.abs(v - prev) > Math.abs(a - prev) ? v : a, prev);
-      proxy.scale.setScalar(s);
+      const s = uniformScale(sel.userData.edit?.scale ?? 1);
       kit.edit(selName, { pos: proxy.position.toArray().map(v => round(v)), rot: [r.x, r.y, r.z].map(v => round(v / DEG2, 10)),
         scale: round(Math.max(0.05, s), 100) });
-      selBox?.update();
+      selBoxes.forEach(b => b.update?.());
     });
   }
   const DEG2 = Math.PI / 180;
-  /** Select an object by name (null = none): yellow box + gizmo in the current mode. Returns its info or null. */
-  function select(name) {
-    needsRender = true;   // also reached from a click in the view, not only through the API
-    selName = null; if (selBox) { uiLayer.remove(selBox); selBox.dispose?.(); selBox = null; } gizmo?.detach();
-    const o = name && kit?.root.getObjectByName(name);
-    if (!o || !['object', 'light', 'camera'].includes(o.userData.kind)) return null;
-    selName = name;
-    // Marker: objects get a box; a camera shows its view frustum; a light a small sphere that follows it.
-    if (o.userData.kind === 'object') selBox = new THREE.BoxHelper(o, 0xf2ff59);
-    else if (o.userData.kind === 'camera') selBox = new THREE.CameraHelper(o);
-    else {
-      selBox = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 8), new THREE.MeshBasicMaterial({ color: 0xf2ff59, wireframe: true }));
-      selBox.update = () => selBox.position.copy(o.position); selBox.update();
-    }
-    uiLayer.add(selBox);
-    ensureGizmo();
-    const e = o.userData.edit || { pos: o.userData.pivot, rot: [0, 0, 0], scale: 1 };
-    proxy.position.set(...e.pos); proxy.rotation.set(...e.rot.map(v => v * DEG2)); proxy.scale.setScalar(Array.isArray(e.scale) ? e.scale[0] : e.scale);
-    if (gizmoMode) { gizmo.setMode(gizmoMode); gizmo.attach(proxy); }
+  /** The selection as the app sees it: one object / light / camera with its edit state, or a group (names, gizmo state). */
+  function selInfo() {
+    if (!selName) return null;
+    if (isGroup()) return { name: selName, names: [...selNames], category: 'GROUP', ...proxyState() };
+    const o = kit.root.getObjectByName(selName), e = editOf(o);
     const light = o.isLight ? { type: o.userData.type, color: '#' + o.color.getHexString(), intensity: o.intensity, on: o.visible } : undefined;
-    return { name, category: o.userData.category ?? (o.isLight ? 'LGT' : o.userData.kind === 'camera' ? 'CAM' : undefined), ...e, light };
+    return { name: selName, category: o.userData.category ?? (o.isLight ? 'LGT' : o.userData.kind === 'camera' ? 'CAM' : undefined), ...e, light };
+  }
+  /** Select an object by name (null = none): yellow box + gizmo in the current mode. add = Shift/Ctrl-click: toggle an
+   *  object in or out of the selection (add with nothing under the cursor keeps the selection). Returns selInfo(). */
+  function select(name, add = false) {
+    const o = name && kit?.root.getObjectByName(name);
+    const ok = o && ['object', 'light', 'camera'].includes(o.userData.kind);
+    if (add && !ok) return selInfo();
+    if (add && o.userData.kind === 'object' && selName && kit.root.getObjectByName(selName)?.userData.kind === 'object')
+      return selectMany(selNames.includes(name) ? selNames.filter(n => n !== name) : [...selNames, name]);
+    return selectMany(ok ? [name] : []);
+  }
+  /** Select several at once (one = a single selection; several = objects only, see above). The group's gizmo sits at
+   *  the centre of their joint box, unturned, scale 1. */
+  function selectMany(names) {
+    needsRender = true;   // also reached from a click in the view, not only through the API
+    for (const b of selBoxes) { uiLayer.remove(b); b.dispose?.(); } selBoxes = []; gizmo?.detach(); dragFrom = null;
+    let objs = [...new Set((names || []).map(n => typeof n === 'string' && kit?.root.getObjectByName(n)))]
+      .filter(o => o && ['object', 'light', 'camera'].includes(o.userData.kind));
+    if (objs.length > 1) objs = objs.filter(o => o.userData.kind === 'object');
+    selNames = objs.map(o => o.name); selName = selNames.at(-1) ?? null;
+    if (!selName) return null;
+    // Marker: objects get a box; a camera shows its view frustum; a light a small sphere that follows it.
+    for (const o of objs) {
+      let b;
+      if (o.userData.kind === 'object') b = new THREE.BoxHelper(o, 0xf2ff59);
+      else if (o.userData.kind === 'camera') b = new THREE.CameraHelper(o);
+      else {
+        b = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 8), new THREE.MeshBasicMaterial({ color: 0xf2ff59, wireframe: true }));
+        b.update = () => b.position.copy(o.position); b.update();
+      }
+      uiLayer.add(b); selBoxes.push(b);
+    }
+    ensureGizmo();
+    if (objs.length > 1) {
+      const box = new THREE.Box3(); objs.forEach(o => box.expandByObject(o));
+      proxy.position.copy(box.getCenter(new THREE.Vector3())); proxy.rotation.set(0, 0, 0); proxy.scale.setScalar(1);
+    } else {
+      const e = editOf(objs[0]);
+      proxy.position.set(...e.pos); proxy.rotation.set(...e.rot.map(v => v * DEG2)); proxy.scale.setScalar(Array.isArray(e.scale) ? e.scale[0] : e.scale);
+    }
+    if (gizmoMode) { gizmo.setMode(gizmoMode); gizmo.attach(proxy); }
+    return selInfo();
+  }
+  /** Move / turn / scale the selected group exactly as a gizmo drag would (automation, tests): pos = where the group's
+   *  centre goes, rot (degrees) and scale = the gizmo's state relative to the group as selected. Returns the edits. */
+  function editGroup({ pos, rot, scale } = {}) {
+    if (!isGroup()) return null;
+    beginGroup();
+    if (pos) proxy.position.set(...pos);
+    if (rot) proxy.rotation.set(...rot.map(v => v * DEG2));
+    if (scale !== undefined) proxy.scale.setScalar(scale);
+    applyGroup(); dragFrom = null; return groupEdits();
   }
   /** Gizmo mode: 'translate' | 'rotate' | 'scale' | null (orbit only). */
   function setGizmo(mode) {
     gizmoMode = mode; ensureGizmo();
     if (!mode) gizmo.detach(); else { gizmo.setMode(mode); if (selName) gizmo.attach(proxy); }
   }
-  // Click (not drag) in the viewport picks the object under the cursor.
+  // Click (not drag) in the viewport picks the object under the cursor; Shift / Ctrl / Cmd-click adds or removes it.
   let downAt = null;
   renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; });
   renderer.domElement.addEventListener('pointerup', (e) => {
     if (!downAt || !looping || gizmo?.dragging) return;
     const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]); downAt = null; if (moved > 4) return;
+    const add = e.shiftKey || e.ctrlKey || e.metaKey;
     const r = renderer.domElement.getBoundingClientRect();
     ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), overview);
     ray.near = 0; ray.far = Infinity;
     markerScene.updateMatrixWorld();
     const icon = ray.intersectObjects(markers.children, false)[0];   // light / camera icons win over what is behind them
-    if (icon) { listeners.pick(select(icon.object.userData.pick)); return; }
-    const hit = kit ? ray.intersectObjects(objectGroups(), true)[0] : null;
-    let o = hit?.object; while (o && o.parent !== kit.root) o = o.parent;
-    listeners.pick(o ? select(o.name) : (select(null), null));
+    if (icon) { listeners.pick(select(icon.object.userData.pick, add)); return; }
+    const o = pickTop(ray.intersectObjects(objectGroups(), true)[0]);
+    if (!o && add) return;
+    listeners.pick(o ? select(o.name, add) : (select(null), null));
   });
+  const pickTop = (hit) => { let o = kit ? hit?.object : null; while (o && o.parent !== kit.root) o = o.parent; return o || null; };
+  /** Client px (in this document) of a world point, the inverse of the click mapping above. */
+  function toClient(v) {
+    const p = v.clone().project(overview), r = renderer.domElement.getBoundingClientRect();
+    return [r.left + (p.x + 1) / 2 * r.width, r.top + (1 - p.y) / 2 * r.height];
+  }
+  /** Automation: a point in the view where a click picks `name` (nothing in front of it), or null. */
+  function locate(name) {
+    const o = kit?.root.getObjectByName(name); if (!o || o.userData.kind !== 'object') return null;
+    const b = new THREE.Box3().setFromObject(o), c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
+    for (const [u, w] of [[0, 0], [-0.25, 0], [0.25, 0], [0, -0.25], [0, 0.25], [-0.25, -0.25], [0.25, 0.25], [-0.25, 0.25], [0.25, -0.25]]) {
+      const pt = c.clone().add(new THREE.Vector3(u * s.x, w * s.y, u * s.z)), p = pt.clone().project(overview);
+      if (Math.abs(p.x) > 0.9 || Math.abs(p.y) > 0.9 || p.z > 1) continue;
+      ray.setFromCamera(new THREE.Vector2(p.x, p.y), overview); ray.near = 0; ray.far = Infinity;
+      if (pickTop(ray.intersectObjects(objectGroups(), true)[0]) === o) return toClient(pt);
+    }
+    return null;
+  }
+  /** Automation: the gizmo handle for `axis` ('X', 'Y', 'Z') → {at: its client px, from: the gizmo centre's}. */
+  function gizmoHandle(axis = 'X') {
+    if (!gizmo?.object) return null;
+    gizmo.getHelper().updateMatrixWorld(true);
+    const pk = gizmo._gizmo?.picker?.[gizmo.mode]?.children.find(c => c.name === axis); if (!pk) return null;
+    return { at: toClient(new THREE.Box3().setFromObject(pk).getCenter(new THREE.Vector3())), from: toClient(proxy.getWorldPosition(new THREE.Vector3())) };
+  }
   /** Run extra scene-code blocks against the LIVE set (adds, clones, removes) — no reload, the view stays put. */
   function exec(code) {
     try { new Function('kit', '"use strict";\n' + code)(kit); }
     catch (e) { return { ok: false, error: String(e && e.message || e) }; }
-    if (selName && !kit.root.getObjectByName(selName)) select(null);
+    if (selNames.some(n => !kit.root.getObjectByName(n))) selectMany(selNames.filter(n => kit.root.getObjectByName(n)));
+    else selBoxes.forEach(b => b.update?.());   // an edit line of a selected object: the box follows it
     box = new THREE.Box3().setFromObject(kit.root); setMode(mode);   // new lights + kit.settings() take effect
     refreshMarkers();   // added / removed lights and cameras get / lose their icon
     return { ok: true, stats: { ...kit.stats }, cameras: kit.cameras.map(c => c.name) };
@@ -624,8 +730,12 @@ export async function createViewer({ container = document.body, width = 1280, he
   /** Current orbit view (for "add camera here" and placing new things in front of the user). */
   function viewState() {
     const target = controls ? controls.target.clone() : new THREE.Vector3(0, 0, -1).applyQuaternion(overview.quaternion).add(overview.position);
-    const hit = supportPoint();
-    return { pos: overview.position.toArray(), target: target.toArray(), fov: overview.fov, hit, ground: hit && groundBelow(hit) };
+    const hit = supportPoint(), c = overview.position;
+    // a person stands at most ~4 m in front of the view: aimed down a long room, the hit was the far wall and an
+    // imported character landed inside the tavern's hearth, out of sight (10-29)
+    const d = hit && Math.hypot(hit[0] - c.x, hit[2] - c.z), k = d > 4.5 ? 4 / d : 1;
+    const stand = hit && (k < 1 ? [c.x + (hit[0] - c.x) * k, c.y, c.z + (hit[2] - c.z) * k] : hit);
+    return { pos: c.toArray(), target: target.toArray(), fov: overview.fov, hit, ground: stand && groundBelow(stand) };
   }
   /** The walkable ground under a point: the LOWEST upward-facing surface straight below it (a person added while the
    *  view looks at a shelf or a table stands on the floor under it, not on top of it); y = 0 when there is none. */
@@ -657,8 +767,10 @@ export async function createViewer({ container = document.body, width = 1280, he
   }
 
   const dirty = (f) => (...a) => { const r = f(...a); needsRender = true; if (r && typeof r.then === 'function') r.finally(() => { needsRender = true; }); return r; };
-  return { load: dirty(load), setMode: dirty(setMode), shot, frame, seek, setView, renderView: () => renderWith(overview), visible, exportGLB, setSize: dirty(setSize), texturesSettled, interactive, frameView: dirty(frameView),
-    blackness, select: dirty(select), setGizmo: dirty(setGizmo), exec: dirty(exec), objects, viewState, addModel: dirty(addModel), hasModel: (id) => models.has(id), on: (ev, f) => { listeners[ev] = f; },
+  /** The planned camera states of a whole shot (read-only; the app measures the move's speed for 48 fps). */
+  const path = (camName, move, n, fps = 24) => planShot(camName, move, n, 1, fps).map(({ pos, lookAt, fov, roll }) => ({ pos, lookAt, fov, roll }));
+  return { load: dirty(load), setMode: dirty(setMode), shot, frame, seek, path, setView, renderView: () => renderWith(overview), visible, exportGLB, setSize: dirty(setSize), texturesSettled, interactive, frameView: dirty(frameView),
+    blackness, select: dirty(select), selectMany: dirty(selectMany), editGroup: dirty(editGroup), locate, gizmoHandle, setGizmo: dirty(setGizmo), exec: dirty(exec), objects, viewState, addModel: dirty(addModel), hasModel: (id) => models.has(id), on: (ev, f) => { listeners[ev] = f; },
     MOVES, get canvas() { return renderer.domElement; }, renderer, get result() { return result; },
     get cameras() { return kit ? kit.cameras.map(c => c.name) : []; } };
 }

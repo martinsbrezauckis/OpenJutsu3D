@@ -15,13 +15,17 @@
     {type:'stop'}                               → {}                  stops a running play
     {type:'thumb', cam}                         → {frame: ArrayBuffer JPEG 480×270}
     {type:'exec', code}                         → {ok, stats, cameras, error?}  run extra blocks on the live set (no reload)
-    {type:'select', name|null}                  → {info}              selection box + gizmo
+    {type:'select', name|null, add?}            → {info}              selection box + gizmo; add = Shift-click (toggle in a group)
+    {type:'selectMany', names}                  → {info}              several objects (info.names) + one gizmo at their centre
+    {type:'editGroup', pos?, rot?, scale?}      → {edits, group}      move the selected group as one gizmo drag would
+    {type:'locate', name} / {type:'gizmoHandle', axis} → {at:[x,y] | null}   automation: where to click / drag in the view
     {type:'gizmo', mode:'translate'|'rotate'|'scale'|null} → {}
     {type:'objects'}                            → {objects:[{name, category, triangles}]}
     {type:'viewState'}                          → {pos, target, fov}  the orbit view (add camera here / place new things)
     {type:'models', items:[{id, glb, height}]}  → {}                  GLB bytes for kit.model() (library / imported), parsed once
   Events posted by the viewport: {type:'picked', info|null} (click in the view), {type:'edited', name, pos, rot, scale}
-  (gizmo drag finished — the app records it as a kit.edit line).
+  (gizmo drag finished — the app records it as a kit.edit line), {type:'edited', edits:[…], group} (a group drag: one
+  version with a kit.edit line per object).
 -->
 <html><head><meta charset="utf-8"><title>Studio viewport</title>
 <style>html,body{margin:0;height:100%;background:#0d0f12;overflow:hidden}canvas{display:block;width:100%!important;height:100%!important;object-fit:contain}</style>
@@ -140,12 +144,23 @@ addEventListener('message', async (ev) => {
         if (m.i !== null && (!okCam(m.cam) || !okMove(m.move))) throw new Error('bad camera or move');
         return reply(id, { state: v.seek(m.cam, m.move, m.i === null ? null : m.i | 0, m.n, 1, m.fps || 24) });
       }
+      case 'path': {   // camera states of the shot, every frame (≤ 60 s at 48 fps)
+        if (!okCam(m.cam) || !okMove(m.move) || !(m.n > 0 && m.n <= 2881)) throw new Error('bad camera or move');
+        return reply(id, { states: v.path(m.cam, m.move, m.n | 0, m.fps || 24) });
+      }
       case 'exec': return reply(id, v.exec(String(m.code || '')));
       case 'models': {   // [{id, glb: ArrayBuffer, height}] for kit.model(); parsed once
         for (const it of (m.items || []).slice(0, 40)) if (typeof it.id === 'string' && it.glb instanceof ArrayBuffer) await v.addModel(it.id, it.glb, it.height);
         return reply(id, {});
       }
-      case 'select': return reply(id, { info: v.select(typeof m.name === 'string' ? m.name : null) });
+      case 'select': return reply(id, { info: v.select(typeof m.name === 'string' ? m.name : null, !!m.add) });
+      case 'selectMany': return reply(id, { info: v.selectMany(Array.isArray(m.names) ? m.names.slice(0, 200) : []) });
+      case 'editGroup': {
+        const num3 = (a) => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite) ? a : undefined;
+        return reply(id, v.editGroup({ pos: num3(m.pos), rot: num3(m.rot), scale: Number.isFinite(m.scale) ? m.scale : undefined }) || { edits: [], group: null });
+      }
+      case 'locate': return reply(id, { at: typeof m.name === 'string' ? v.locate(m.name) : null });
+      case 'gizmoHandle': { const h = v.gizmoHandle(['X', 'Y', 'Z'].includes(m.axis) ? m.axis : 'X'); return reply(id, { at: h?.at ?? null, from: h?.from ?? null }); }
       case 'gizmo': v.setGizmo(['translate', 'rotate', 'scale'].includes(m.mode) ? m.mode : null); return reply(id, {});
       case 'objects': return reply(id, { objects: v.objects() });
       case 'viewState': return reply(id, v.viewState());

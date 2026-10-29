@@ -29,8 +29,10 @@ the CPU by default; on a machine with an NVIDIA GPU use `SCENEKIT_GL=vulkan pyth
 | `POST /open {url?, width?, height?}` | Open or reload the app (default 1600×900). |
 | `POST /act {name, args?, wait?, settle?}` | Run one action. `wait` = seconds to wait after it (default 1.5); `settle: true` waits until the app is no longer busy (builds, renders). Returns `{ok, state, shot, errors}`. |
 | `POST /key {key, where?, wait?}` | A real key press, e.g. `Escape`; `where`: `page` (default) or `viewport` (inside the 3D view). |
+| `POST /click {object? \| x?, y?, mods?, wait?}` | A real mouse click in the 3D view: on a spot where a click picks `object` (or at page pixels `x`, `y`). `mods`: `["Shift"]`, `["Control"]` or `["Meta"]` held during the click (adds to / removes from the selection). |
+| `POST /drag {handle?, by?, wait?}` | A real mouse drag of the gizmo handle `X`, `Y` or `Z` (default `X`) by `by` pixels (default 80) outward along that axis as the screen shows it. Select something and set `editMode` first. |
 | `POST /upload {path, wait?}` | Give a file to the open Import input of the model library (open it first with `library`); waits until the import is done. The file must lie under `bench/out`. |
-| `GET /state` | The app's state: view, scene, versions, camera, recipe, takes, chat, edit state. |
+| `GET /state` | The app's state: view, scene, versions, camera, recipe, takes, chat, edit state (`edit.sel` = the last picked, `edit.names` = all selected when several, `edit.pos` / `rot` / `scale` = the selection's gizmo). |
 | `GET /shot?name=x` | A screenshot now. |
 | `GET /log` | The action log and browser console errors. |
 | `GET /actions` | The names of all actions. |
@@ -66,6 +68,7 @@ Run several servers for parallel jobs, each with its own browser: `python3 bench
 | `send` | — send it (a change, or a question in Chat only mode) |
 | `answer` | `questionId`, `option` — answer one of the director's questions |
 | `continueQuestions` | — continue with the answers (defaults for unanswered ones) |
+| `confirmChange` | `true` = apply, `false` = cancel the change waiting on the last confirm card (`ask` mode on a built set) |
 | `buildThis` | — build the plan shown at the concept step |
 | `undo`, `redo` | — step through versions |
 | `version` | `index` — jump to a version |
@@ -84,6 +87,7 @@ Run several servers for parallel jobs, each with its own browser: `python3 bench
 | `select` | `index` — select a move in the timeline |
 | `preview` | — play the move in the viewport |
 | `mode` | `lit` or `clay` |
+| `highFps` | `true` / `false` / `null` — the 48 fps pill: also make a 48 fps copy of the render (`null` = automatic: on when the camera moves fast; `state().fps48` = `{on, auto, user, motion}`) |
 | `render` | — render the shot (clay → look still → LTX video) |
 | `resumeRender` | `shotId` — continue a render whose frames were already made |
 | `showTake` | `index`, `final` / `clay` / `side` |
@@ -96,9 +100,10 @@ Run several servers for parallel jobs, each with its own browser: `python3 bench
 | Action | Arguments |
 |---|---|
 | `editMode` | `translate`, `rotate`, `scale` or `null` (orbit) |
-| `selectObject` | object name or `null` |
-| `editSelected` | `{pos?: [x,y,z], rot?: [x,y,z] degrees, scale?: number}` |
-| `duplicate`, `deleteSelected` | — on the selected object |
+| `selectObject` | object name or `null`, `add?` — `add: true` = Shift-click: adds the object to the selection or takes it out again. Several selected = objects only: a light or camera is always selected alone |
+| `selectMany` | `[names]` — select several objects at once (the gizmo sits at their centre) |
+| `editSelected` | `{pos?: [x,y,z], rot?: [x,y,z] degrees, scale?: number}`; for several objects: `pos` = where the group's centre goes, `rot` / `scale` = the group gizmo's turn / size (one version for the whole group, like a gizmo drag) |
+| `duplicate`, `deleteSelected` | — on every selected object, one version each |
 | `addThing` | `person`, `cube`, `sphere`, `cylinder`, `cone`, `pyramid`, `point`, `spot`, `sun`, `camera`, `library` |
 | `objectsPanel` | — show or hide the object list |
 | `setLight` | `{color?, intensity?, on?}` — change the selected light (one version per light) |
@@ -123,4 +128,5 @@ act '{"name":"render","settle":true}'                   # returns when the video
 
 Whole flows as scripts: `bench/e2e_ui.py` (prompt → build → shot, `--prompt`, `--ref`, `--aspect`, `--move`,
 `--seconds`, `--no-render`), `bench/e2e_edit.py` (hand editing), `bench/e2e_library.py` (model library),
-`bench/e2e_p7.py` (scene settings and chat modes).
+`bench/e2e_p7.py` (scene settings and chat modes), `bench/e2e_multiselect.py` (multi-select with real clicks and gizmo
+drags).

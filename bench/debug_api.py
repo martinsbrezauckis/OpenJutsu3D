@@ -9,6 +9,10 @@ Endpoints (127.0.0.1 only):
                                               or with settle=true until the app is not busy (max 3600 s; settle=<seconds> sets the cap — long shots); screenshot
   POST /upload {path, wait?}                  give a file to the open Import input (library panel); path must lie under
                                               bench/out (e.g. bench/out/mixamo/*.fbx); waits until the import is done
+  POST /click  {object? | x?, y?, mods?, wait?}  a real mouse click in the 3D view on a spot that picks `object` (or at
+                                              page px x, y); mods: ["Shift"] / ["Control"] / ["Meta"] held during it
+  POST /drag   {handle?, by?, wait?}          a real mouse drag of the gizmo handle "X" / "Y" / "Z" (default X) by
+                                              `by` px (default 80) outward along that axis on screen
   GET  /state                                 window.__o3j.state()
   GET  /shot?name=x                           screenshot now
   GET  /log                                   action log (app) + console errors (browser)
@@ -29,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import math
 import http.server
 import json
 import os
@@ -92,6 +97,34 @@ class Session:
         else:
             self.page.locator("body").press(key)
         time.sleep(float(wait)); return self.reply(f"key-{key}")
+
+    MODS = {"Shift", "Control", "Meta"}
+
+    def click(self, obj=None, x=None, y=None, mods=None, wait=1.0):
+        """A real mouse click in the page (the 3D view picks with it); modifier keys are held during the click."""
+        mods = list(mods or [])
+        if any(m not in self.MODS for m in mods): raise ValueError("mods: Shift, Control, Meta")
+        if obj is not None:
+            p = self.page.evaluate("async (n) => await window.__o3j.locate(n)", str(obj))
+            if not p: raise ValueError(f"{obj} has no clickable spot in the view")
+            x, y = p
+        x, y = float(x), float(y)
+        for m in mods: self.page.keyboard.down(m)
+        try: self.page.mouse.click(x, y)
+        finally:
+            for m in reversed(mods): self.page.keyboard.up(m)
+        time.sleep(float(wait)); r = self.reply(f"click-{obj or 'xy'}"); r["at"] = [x, y]; return r
+
+    def drag(self, handle="X", by=80.0, wait=1.5):
+        """A real mouse drag of a gizmo handle, outward along its axis as the screen shows it."""
+        if handle not in ("X", "Y", "Z"): raise ValueError("handle: X, Y or Z")
+        h = self.page.evaluate("async (a) => await window.__o3j.gizmoHandle(a)", handle)
+        if not h: raise ValueError("no gizmo handle in the view (select something, editMode translate)")
+        (hx, hy), (ox, oy) = h["at"], h["from"]; d = math.hypot(hx - ox, hy - oy) or 1.0
+        tx, ty = hx + (hx - ox) / d * float(by), hy + (hy - oy) / d * float(by)
+        self.page.mouse.move(hx, hy, steps=3); self.page.mouse.down(); time.sleep(0.3)
+        self.page.mouse.move(tx, ty, steps=12); time.sleep(0.3); self.page.mouse.up()
+        time.sleep(float(wait)); r = self.reply(f"drag-{handle}"); r["at"] = [[hx, hy], [tx, ty]]; return r
 
     def upload(self, path: str, wait=180.0):
         # The Import input of the library panel (Add › library); then wait while the panel says Converting/Adding.
@@ -161,6 +194,8 @@ def main():
                     url = body.get("url", a.url)
                     if "{0.scheme}://{0.netloc}".format(urlparse(url)) != app_origin: return self.send(400, {"ok": False, "error": "only the app's origin"})
                     return self.send(200, s.open(url, body.get("width", 1600), body.get("height", 900)))
+                if self.path == "/click": return self.send(200, s.click(body.get("object"), body.get("x"), body.get("y"), body.get("mods"), body.get("wait", 1.0)))
+                if self.path == "/drag": return self.send(200, s.drag(body.get("handle", "X"), body.get("by", 80), body.get("wait", 1.5)))
                 if self.path == "/key": return self.send(200, s.key(body.get("key"), body.get("where", "page"), body.get("wait", 1.0)))
                 if self.path == "/act": return self.send(200, s.act(body.get("name"), body.get("args"), body.get("wait", 1.5), body.get("settle", False)))
                 if self.path == "/upload":

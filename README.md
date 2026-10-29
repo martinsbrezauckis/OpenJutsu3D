@@ -32,7 +32,8 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
 ## Features
 
 - Prompt or reference picture → planned, live-built 3D set; concept picture first (optional).
-- Chat modes: Auto, Ask first, Don't ask, Chat only (answers about the set without changing it).
+- Chat modes: Auto, Ask first (every change to a built set waits for Apply / Cancel), Don't ask, Chat only (answers
+  about the set without changing it).
 - 33 camera moves plus your own camera path: scrub the timeline to a moment, frame the view and add a keyframe there
   (the camera passes through it at that time); chained moves, real-time preview, shots from 1 s up to 60 s (longer
   than 15 s renders in overlapping parts that are crossfaded).
@@ -45,8 +46,9 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
 - Your own characters: import a rigged character as .glb or .fbx (e.g. downloaded from Mixamo); it plays its own
   motion, and a motion file imported with a person selected gives that person the motion (motions from one Mixamo
   character fit the others). We ship no Mixamo files — bring your own.
-- Hands-on editing in the viewport: select (click or object list), move / rotate / scale gizmo for objects, lights and
-  cameras, duplicate, delete, add a person, shapes, point / spot / sun lights and a camera at the current view; Esc
+- Hands-on editing in the viewport: select (click or object list; Shift / Ctrl / Cmd-click selects several objects and
+  moves, rotates, scales, duplicates or deletes them together as one step), move / rotate / scale gizmo for objects,
+  lights and cameras, duplicate, delete, add a person, shapes, point / spot / sun lights and a camera at the current view; Esc
   returns to orbit. Lights and cameras show as icons in the view; a selected light has colour, brightness and on/off.
 - Asset library with model packs: a small built-in Samples pack (Poly Haven, CC0); add more yourself — Poly Haven's
   library in one click, a pack from a link (.glb / .zip) or a folder on your computer, or single GLB files. Each pack
@@ -57,6 +59,11 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
   every scene is saved in **My scenes**; Share saves a scene file that anyone can open in Open 3D Jutsu.
 - Self-repair: builder code that fails to run is sent back once with the exact error; anything still missing is said
   in the chat.
+- 48 fps for fast camera moves: the shot bar's **48 fps** pill turns on by itself when the planned camera path moves
+  fast (whip pan, bullet time, robot arm, quick orbits) and adds a 48 fps copy next to the 24 fps video; you can
+  switch it on or off for any shot. The in-between frames come from ComfyUI's built-in frame interpolation (RIFE) when
+  your ComfyUI has a model in `models/frame_interpolation` (seconds on a GPU), otherwise from ffmpeg's motion-compensated
+  interpolation on the app server (no GPU, about a minute for a 5 s shot).
 - Takes with Final / Clay / Side-by-side view; downloads: video, still, GLB with materials and textures. A render
   that stops after its frames were made (e.g. the render server went away) continues from them when you press
   Render shot again.

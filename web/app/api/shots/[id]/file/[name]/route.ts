@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { shotDir } from "@/lib/render";
 import { fail } from "@/lib/http";
 export const runtime = "nodejs";
-const TYPES: Record<string, string> = { "clay.mp4": "video/mp4", "lit.mp4": "video/mp4", "render.mp4": "video/mp4",
+const TYPES: Record<string, string> = { "clay.mp4": "video/mp4", "lit.mp4": "video/mp4", "render.mp4": "video/mp4", "render48.mp4": "video/mp4",
   "look.png": "image/png", "look_raw.png": "image/png" };
 /** GET one shot file — fixed allow-list of names, never a client path. */
 export async function GET(_: Request, ctx: { params: Promise<{ id: string; name: string }> }) {
