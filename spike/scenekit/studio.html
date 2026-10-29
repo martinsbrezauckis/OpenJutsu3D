@@ -45,7 +45,8 @@ let interactiveOn = false, playing = false;
 const reply = (id, body, transfer = []) => parent.postMessage({ id, ...body }, APP_ORIGIN, transfer);
 const blob2buf = (canvas, type, q) => new Promise(res => canvas.toBlob(b => b.arrayBuffer().then(res), type, q));
 const okCam = (c) => typeof c === 'string' && /^CAM_[A-Za-z0-9_]{1,60}$/.test(c);
-const okMove = (m) => typeof m === 'string' && m.split('+').every(s => s.split(':')[0] in MOVE_PHRASE);
+// a recipe segment is "move[:seconds[:amount]][@CAM_x]" (@ = that segment's camera: a cut inside the shot)
+const okMove = (m) => typeof m === 'string' && m.split('+').every(s => { const [b, c, x] = s.split('@'); return b.split(':')[0] in MOVE_PHRASE && (c === undefined || okCam(c)) && x === undefined; });
 
 /** Render frames [start, start+count) of a move at w×h, then restore the viewport. Returns JPEG/PNG ArrayBuffers. */
 // `mime`, not `type`: callers spread the message ({...m}), whose own `type` ('frames') would replace it — toBlob then
@@ -61,7 +62,16 @@ function freeze() {
   cover.getContext('2d').drawImage(v.canvas, 0, 0); cover.style.display = 'block';
 }
 const thaw = () => requestAnimationFrame(() => requestAnimationFrame(() => { cover.style.display = 'none'; }));
-async function renderFrames({ cam, move, n, fps = 24, w, h, mode, start = 0, count = 1, mime = 'image/jpeg', quality = 0.92 }) {
+// One capture at a time: a capture awaits (textures, encoding), and a second one started meanwhile (camera thumbnails
+// refresh together after an edit) froze the already shrunken canvas — the blocky flash after a group drag — and the
+// first one's ending reset the size under the second (audit 2, 10-29).
+let captureChain = Promise.resolve();
+function renderFrames(args) {
+  const run = captureChain.then(() => renderFramesNow(args));
+  captureChain = run.catch(() => {});
+  return run;
+}
+async function renderFramesNow({ cam, move, n, fps = 24, w, h, mode, start = 0, count = 1, mime = 'image/jpeg', quality = 0.92 }) {
   const wasInteractive = interactiveOn; if (wasInteractive) { freeze(); v.interactive(false); }
   v.setSize(w, h); v.setMode(mode);
   await v.texturesSettled();
@@ -98,8 +108,14 @@ addEventListener('message', async (ev) => {
       case 'interactive': interactiveOn = !!m.on; v.interactive(interactiveOn); return reply(id, {});
       case 'prompt': {
         if (!okCam(m.cam) || !okMove(m.move)) throw new Error('bad camera or move');
-        const vis = v.visible(m.cam, m.move, Math.max(0, Math.min((m.n | 0) - 1, m.i | 0)), m.n);   // i = first frame of a long-shot segment
-        return reply(id, { prompt: compilePrompt(v.result.meta, vis, m.move), visible: vis.slice(0, 15) });
+        const n = m.n | 0, i0 = Math.max(0, Math.min(n - 1, m.i | 0));   // i = first frame of a long-shot segment
+        // Cuts: what the camera sees on the first frame of every shot after a cut, for "…; cut to a close-up of the bar"
+        // (one LTX job covers ≤ 361 frames, so only the shots in [i, i + 360] are described).
+        const plan = n > 1 ? v.path(m.cam, m.move, n, 24) : [], cuts = {};
+        for (let f = i0 + 1; f < Math.min(n, i0 + 361); f++) if (plan[f].cut) cuts[plan[f].seg] = { cam: plan[f].cam, visible: v.visible(m.cam, m.move, f, n) };
+        const vis = v.visible(m.cam, m.move, i0, n);
+        const span = plan.length ? [plan[i0].seg, plan[Math.min(n - 1, i0 + 360)].seg] : null;
+        return reply(id, { prompt: compilePrompt(v.result.meta, vis, m.move, 5, { cuts, span }), visible: vis.slice(0, 15) });
       }
       case 'frames': {
         if (!okCam(m.cam) || !okMove(m.move)) throw new Error('bad camera or move');

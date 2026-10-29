@@ -8,7 +8,7 @@
  * the motion of that frame. FAST_MOTION is the peak (3-frame mean) above which a shot is fast; calibrated over every
  * preset at 1–15 s (bench/fps48_test.mts prints the table).
  */
-export type CamState = { pos: number[]; lookAt: number[]; fov: number; roll?: number };
+export type CamState = { pos: number[]; lookAt: number[]; fov: number; roll?: number; cut?: boolean };
 export const FAST_MOTION = 0.011;   // frame heights per 24 fps frame: a 16:9 width crossed in < 6.7 s (the "7-second" pan-judder rule)
 
 const sub = (a: number[], b: number[]) => a.map((x, i) => x - b[i]), dot = (a: number[], b: number[]) => a.reduce((s, x, i) => s + x * b[i], 0);
@@ -20,10 +20,11 @@ function basis(s: CamState) {
   [r, u] = [r.map((x, i) => x * c + u[i] * n), u.map((x, i) => u[i] * c - x * n)];
   return { f, r, u, t: Math.tan((s.fov * Math.PI) / 360) };
 }
-/** Per-frame image motion (frame heights) between consecutive states. */
+/** Per-frame image motion (frame heights) between consecutive states. A camera cut (states[i+1].cut) is not motion: 0. */
 export function frameMotion(states: CamState[], aspect = 16 / 9): number[] {
   const out: number[] = [];
   for (let i = 0; i + 1 < states.length; i++) {
+    if (states[i + 1].cut) { out.push(0); continue; }
     const a = basis(states[i]), b = basis(states[i + 1]), d = Math.hypot(...sub(states[i].lookAt, states[i].pos)) || 1;
     let sum = 0, cnt = 0;
     for (const z of [0.5 * d, d, 8 * d]) for (const sx of [-0.8, 0, 0.8]) for (const sy of [-0.8, 0, 0.8]) {

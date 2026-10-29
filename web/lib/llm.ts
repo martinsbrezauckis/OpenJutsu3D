@@ -110,7 +110,9 @@ export async function image(prompt: string, refs: Img[], opts: { route: Route; m
       const names: string[] = [];
       for (const [k, r] of refs.entries()) { const n = join(dir, `ref${k}.png`); await writeFile(n, r.bytes); names.push(n); }
       const dst = join(dir, "out.png");
-      const req = `$imagegen ${names.length ? `Using the reference image(s) at ${names.join(", ")} — ` : "Generate a new image (no reference). "}${prompt} Save the result as ${dst}`;
+      // Prompts number the pictures ("the first picture", "picture 3"): say which file is which when there are several.
+      const at = names.length > 1 ? names.map((n, k) => `picture ${k + 1} = ${n}`).join(", ") : names.join(", ");
+      const req = `$imagegen ${names.length ? `Using the reference image(s) at ${at} — ` : "Generate a new image (no reference). "}${prompt} Save the result as ${dst}`;
       await runCodex(["exec", "-s", "workspace-write", "--skip-git-repo-check", "-C", dir, "--", req], dir, 1_800_000);
       const files = await readdir(dir);
       if (!files.includes("out.png")) throw new Error("image model produced no file");

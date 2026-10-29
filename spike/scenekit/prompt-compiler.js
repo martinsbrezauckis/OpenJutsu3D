@@ -48,7 +48,41 @@ const ACTION_PHRASE = { idle: 'standing', walk: 'walking', walk_formal: 'walking
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const PERSON = /\b(\w*(er|or|ist|man|men|woman|women|ian|ant|ent|naut|ess)|person|people|child|children|kid|guy|girl|boy|lady|maid|patron|guest|friend|couple|monk|priest|knight|guard|crowd|figure|chef|cook|staff|elder|youth|teen|baby|family|nun|pilot|clerk|host|hero|thief|bride|groom|soldier|cowboy|ninja|samurai|robot|android|alien|zombie|ghost|witch|wizard|king|queen|prince|princess|nurse|chief|captain|tourist|pedestrian|passerby|vendor|cyclist|athlete|student|scientist|artist|musician|dancer|police|officer|detective|spy)s?\b/;
 
-export function compilePrompt(meta0, visible, move, maxItems = 5) {
+/** The main subject a camera sees — for "cut to … of X": the biggest non-architecture thing, or a person when they fill
+ *  at least a quarter as much of the frame (a far-away patron is not what a shot of the barrels is about). */
+function subject(visible) {
+  const big = visible.find(x => x.category !== 'ENV' && x.cover >= 0.004 && words(x.name));
+  const person = visible.find(x => x.category === 'CHAR' && x.cover >= 0.002 && words(x.name));
+  const v = person && (!big || person.cover >= 0.25 * big.cover) ? person : big;
+  return v ? words(v.name) : '';
+}
+/** Shot size from the camera's name (CAM_closeup → "a close-up"); other names → "a new angle". */
+function shotSize(cam) {
+  const w = String(cam || '').toLowerCase();
+  return /close/.test(w) ? 'a close-up' : /wide|establish|long/.test(w) ? 'a wide shot' : /medium|mid/.test(w) ? 'a medium shot'
+    : /overhead|top|bird|aerial/.test(w) ? 'an overhead shot' : /low/.test(w) ? 'a low-angle shot' : 'a new angle';
+}
+/**
+ * The camera sentence. Recipe "dolly-in:4+arc-left:6:2.5" → "The camera dollies slowly in, then the camera arcs …".
+ * Camera cuts ("…+arc-left:2@CAM_closeup", opts.cuts = {segment index: {cam, visible}} from the viewer) read as shots in
+ * order: "The camera dollies slowly in; cut to a close-up of the bar counter as the camera arcs slowly to the left".
+ * opts.span = [first, last] recipe segment a long-shot part covers (default: all).
+ */
+export function moveSentence(move, opts = {}) {
+  const segs = move.split('+'), [a, b] = opts.span || [0, segs.length - 1], cuts = opts.cuts || {};
+  let out = '';
+  for (let k = a; k <= b && k < segs.length; k++) {
+    const name = segs[k].split('@')[0].split(':')[0], phrase = MOVE_PHRASE[name] || name;
+    if (k > a && cuts[k]) {
+      const sub = subject(cuts[k].visible || []), size = shotSize(cuts[k].cam);
+      const shotWords = sub ? `${size}${size === 'a new angle' ? ' on' : ' of'} the ${sub}` : size;
+      out += `; cut to ${shotWords}${/^the camera /.test(phrase) ? ' as ' : ', '}${phrase}`;
+    } else out += (k > a ? ', then ' : '') + phrase;
+  }
+  return out[0].toUpperCase() + out.slice(1).toLowerCase() + '.';   // Python str.capitalize()
+}
+
+export function compilePrompt(meta0, visible, move, maxItems = 5, opts = {}) {
   const meta = Object.fromEntries(Object.entries(meta0 || {}).map(([k, v]) => [k, typeof v === 'string' ? clean(v) : v]));
   const setting = meta.setting || meta.title || 'a cinematic set';
   const head = [setting, meta.style, meta.era].filter(Boolean).map((x, i) => (i ? x[0].toLowerCase() + x.slice(1) : x)).join(', ');
@@ -93,10 +127,7 @@ export function compilePrompt(meta0, visible, move, maxItems = 5) {
   if (surfaces.length) parts.push('Surfaces: ' + [...new Set(surfaces)].slice(0, 3).join(', ') + '.');
   if (meta.lighting) parts.push(`Lighting: ${meta.lighting}.`);
   if (meta.atmosphere) parts.push(`${cap(meta.atmosphere)}.`);
-  // Recipe "dolly-in:4+arc-left:6:2.5" → "The camera dollies slowly in, then the camera arcs …"
-  const phrases = move.split('+').map(seg => MOVE_PHRASE[seg.split(':')[0]] || seg.split(':')[0]);
-  const joined = phrases.join(', then ');
-  parts.push(joined[0].toUpperCase() + joined.slice(1).toLowerCase() + '.');   // Python str.capitalize()
+  parts.push(moveSentence(move, opts));
   parts.push('Photoreal live-action cinematography, natural materials, film grain.');
   return parts.join(' ');
 }

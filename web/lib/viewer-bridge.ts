@@ -96,7 +96,7 @@ export class ViewerBridge {
   }
   /** The shot camera's planned state at every frame (pos, lookAt, fov, roll): lib/fps48.ts measures its speed. */
   path(cam: string, move: string, n: number, fps = 24) {
-    return this.call<{ states: { pos: number[]; lookAt: number[]; fov: number; roll: number }[] }>({ type: "path", cam, move, n, fps }).then((r) => r.states);
+    return this.call<{ states: { pos: number[]; lookAt: number[]; fov: number; roll: number; cam?: string; seg?: number; cut?: boolean }[] }>({ type: "path", cam, move, n, fps }).then((r) => r.states);
   }
   async exec(code: string) { await this.ensureModels(code); return this.call<{ ok: boolean; error?: string; stats: ViewerResult["stats"]; cameras: string[] }>({ type: "exec", code }); }
   /** add = Shift/Ctrl-click: toggle `name` in / out of a group selection. */

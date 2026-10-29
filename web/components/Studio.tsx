@@ -2,7 +2,7 @@
 /**
  * Studio.tsx — Open 3D Jutsu UI. Visual system = Comfy-Org/comfy-openjutsu; structure = Higgsfield 3D Jutsu.
  * Two views:
- *   Home   composer card (prompt + chips: reference picture, model, concept picture) → Build; My scenes (saved sets,
+ *   Home   composer card (prompt + chips: up to 5 reference pictures, model, concept picture) → Build; My scenes (saved sets,
  *          "Create blank scene"); example sets that open instantly.
  *   Studio chat panel (questions, concept, live batched build, change requests, renders), the 3D viewer, the shot bar
  *          (camera, move, length), the move timeline with a playhead (Preview), takes; undo/redo over the set's
@@ -27,7 +27,7 @@ type Ready = { status: "ready"; brief: string; batches: string[]; assumptions: s
 type Director = Ready | { status: "ask"; questions: Question[]; assumptions: string[] };
 type RStep = "clay" | "look" | "video";
 type Msg =
-  | { kind: "user"; text: string; ref?: string }
+  | { kind: "user"; text: string; ref?: string; refs?: string[] }
   | { kind: "note"; text: string; detail?: string[] }
   | { kind: "questions"; questions: Question[] }
   | { kind: "confirm"; request: string; answer?: "apply" | "cancel" }
@@ -37,6 +37,9 @@ type Msg =
   | { kind: "error"; text: string };
 type Take = { id: string; label: string; video: string; clay: string; thumb?: string; video48?: string; by48?: string };
 type Version = { code: string; note: string; at: string };
+/** A reference picture (normalized JPEG data URL), its optional label ("the woman") and where it came from. */
+type RefPic = { url: string; label?: string; from?: string };
+const MAX_REFS = 5;   // = lib/refs.ts MAX_REFS (the server refuses a 6th)
 type SceneCard = { id: string; title: string; updated: string };
 
 const GROUPS: { name: string; moves: string[] }[] = [
@@ -69,10 +72,15 @@ const EXAMPLES = [
   { id: "reading", title: "Reading room at golden hour", prompt: "A cozy reading room in an old townhouse at golden hour, a woman reading on the sofa" },
   { id: "temple", title: "Desert temple at dawn", prompt: "Ancient desert temple ruins at dawn with travellers climbing the stairway" },
 ];
+// One shot = a chain of moves; `cam` = that move's camera (a different camera from the move before = a hard CUT to it).
+// INVARIANT: a move without `cam` uses the shot camera (the camera strip's choice) — every shot made before cuts.
+type Seg = { move: string; seconds: number; cam?: string };
 const label = (m: string) => (m === "path" ? "Custom path" : m.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()));
 const camLabel = (c: string) => c.replace(/^CAM_/, "").replace(/_/g, " ");
 // Shots up to 60 s (Higgsfield's range); > 15 s render as overlapping LTX segments (lib/render.ts planSegments).
 const MAX_SECONDS = 60;
+const MAX_PROMPT = 4000;   // the director route refuses longer prompts (api/director)
+const START_SECONDS = [3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 45, 60];
 const frameCount = (seconds: number, fps: number) => Math.round((seconds * fps) / 8) * 8 + 1;   // LTX: 8k+1 frames
 // Frame formats. Clip sides divisible by 64 (LTX); `look` = the image model's nearest size (cropped to the clip).
 // LTX L2R scales the shorter side to 544 then ×2, and the long side must then be a multiple of 32: 4:3 = 1472×1088,
@@ -104,7 +112,7 @@ const Icon = {
   redo: <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5" /><path d="M20 9H9a5 5 0 000 10h3" /></svg>,
 };
 
-async function fileToDataUrl(f: File, max = 1536): Promise<string> {
+async function fileToDataUrl(f: Blob, max = 1536): Promise<string> {
   const img = await createImageBitmap(f); const s = Math.min(1, max / Math.max(img.width, img.height));
   const c = document.createElement("canvas"); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
   c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height); return c.toDataURL("image/jpeg", 0.9);
@@ -120,13 +128,18 @@ export default function Studio() {
   // Chat mode (Higgsfield-style): auto = ask only when unclear, ask = ask before generating, go = never ask, chat = talk, no changes.
   const [chatMode, setChatMode] = useState<"auto" | "ask" | "go" | "chat">("auto");
   const [aspect, setAspect] = useState<Aspect>("16:9");   // chosen on the home composer, kept per scene
+  const [startSeconds, setStartSeconds] = useState(5);   // shot length chosen on the home composer (a length in the prompt wins)
   // Model spend of this scene (lib/cost.ts): Router credits as priced per call, OpenAI USD; unreported = calls with no price.
   const [spend, setSpend] = useState<Spend>(NO_SPEND);
   const addSpend = (c?: Partial<Spend & { calls: number }> | null) => { if (c && (c.calls ?? 0) > 0) setSpend((s) => ({ credits: s.credits + (c.credits ?? 0),
     usd: s.usd + (c.usd ?? 0), unreported: s.unreported + (c.unreported ?? 0) })); };
   const [est, setEst] = useState<{ credits: number; usd: number; runs: number } | null>(null);
   const SIZE = ASPECTS[aspect];
-  const [ref, setRef] = useState<string | null>(null);
+  // Reference pictures: kept across Home → studio, saved with the scene, sent to director, concept, build and every look still.
+  const [refs, setRefs] = useState<RefPic[]>([]);
+  const [refNote, setRefNote] = useState<string | null>(null);
+  const refsNow = useRef(refs); refsNow.current = refs;
+  const refsSave = useRef(false);   // the user changed them: save the open scene (loading a scene does not)
   const [scenes, setScenes] = useState<SceneCard[]>([]);
   // Camera strip order = order first seen: a change that redefines CAM_main must not move it to the end of the strip.
   const camOrder = useRef<string[]>([]);
@@ -162,7 +175,7 @@ export default function Studio() {
   const [mode, setMode] = useState<"lit" | "clay">("lit");
   const [cam, setCam] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
-  const [recipe, setRecipe] = useState<{ move: string; seconds: number }[]>([{ move: "dolly-in", seconds: 4 }]);
+  const [recipe, setRecipe] = useState<Seg[]>([{ move: "dolly-in", seconds: 4 }]);
   // 48 fps copy: auto-on when the shot's camera moves fast (lib/fps48.ts measures the planned path); the user's
   // choice (fps48User) holds until the camera or the move changes.
   const [motion, setMotion] = useState<number | null>(null);
@@ -178,7 +191,29 @@ export default function Studio() {
   const [reloads, setReloads] = useState(0);   // full set reloads (load()), so hands-on edit selection resets
   const lastEdit = useRef<{ key: string; block: string } | null>(null);
   const seconds = recipe.reduce((s, r) => s + r.seconds, 0);
-  const recipeStr = recipe.length === 1 && recipe[0].seconds === 4 ? recipe[0].move : recipe.map((r) => `${r.move}:${r.seconds}`).join("+");
+  // "move:seconds[@CAM_x]+…" (camera-moves.js parseRecipe); a lone 4 s move on the shot camera stays the bare move name
+  const recipeStr = recipe.length === 1 && recipe[0].seconds === 4 && !recipe[0].cam ? recipe[0].move : recipe.map((r) => `${r.move}:${r.seconds}${r.cam ? `@${r.cam}` : ""}`).join("+");
+  const segCam = (i: number) => recipe[i]?.cam ?? cam;
+  const cuts = recipe.some((r, i) => i > 0 && segCam(i) !== segCam(i - 1));
+  /** Pick a camera in the strip. One move: the shot follows it (as before cuts). Several moves: the moves that used the
+   *  shot camera keep the camera they had (a strip click never re-films a shot already built); the pick is then what
+   *  "Add move" uses. */
+  function pickCam(c: string) {
+    if (recipe.length === 1) { if (recipe[0].cam) setRecipe([{ ...recipe[0], cam: undefined }]); }
+    else if (cam && recipe.some((r) => !r.cam)) setRecipe(recipe.map((r) => (r.cam ? r : { ...r, cam })));
+    setCam(c); setShowing(null); return bridge.current?.view(c);
+  }
+  /** Camera of move i (null = the shot camera). Naming the shot camera itself on a lone move keeps it unnamed. */
+  function setMoveCam(i: number, c: string | null) {
+    if (c && scene && !scene.cameras.includes(c)) throw new Error(`no camera ${c}`);
+    setRecipe((r) => r.map((x, k) => (k !== i ? x : { move: x.move, seconds: x.seconds, ...(c && !(r.length === 1 && c === cam) ? { cam: c } : {}) })));
+    setSel(i);
+  }
+  /** "Add move": the new move uses the camera picked in the strip (a cut when the move before it is on another one). */
+  function addMove(m: string, s: number, c: string | null = cam) {
+    if (c && scene && !scene.cameras.includes(c)) throw new Error(`no camera ${c}`);
+    setRecipe((r) => [...r, { move: m, seconds: s, ...(c ? { cam: c } : {}) }]); setSel(recipe.length);
+  }
   const fps48Auto = motion !== null && motion > FAST_MOTION, fps48On = fps48User ?? fps48Auto;
   const use = (stage: "director" | "builder" | "look"): Use | undefined => {
     if (!config) return undefined;
@@ -219,7 +254,7 @@ export default function Studio() {
   async function refreshScenes() { try { setScenes((await api<{ scenes: SceneCard[] }>("/api/scenes")).scenes); } catch { /* none yet */ } }
   function resetStudio() {
     setSceneId(null); setTitle("Untitled set"); setSpend(NO_SPEND); setPrompt(""); setInput(""); setBrief(null); setVersions([]); setHead(-1); setScene(null); setBuilt(false);
-    setMsgs([]); setAnswers({}); setCam(null); setThumbs({}); setTakes([]); setShowing(null); setRecipe([{ move: "dolly-in", seconds: 4 }]); setSel(0);
+    setMsgs([]); setAnswers({}); setCam(null); setThumbs({}); setTakes([]); setShowing(null); setRecipe([{ move: "dolly-in", seconds: startSeconds }]); setSel(0);
   }
   function openStudio(then: (a: Live) => void) {
     resetStudio();
@@ -246,8 +281,8 @@ export default function Studio() {
   }
   // save() runs inside long async chains (a build saves after each step) whose closures were made before the title,
   // prompt, brief or id were set — those were saved stale ("Untitled set", empty prompt, 10-29). Read them from here.
-  const meta = useRef({ title, prompt, brief, sceneId, aspect, spend });
-  meta.current = { title, prompt, brief, sceneId, aspect, spend };
+  const meta = useRef({ title, prompt, brief, sceneId, aspect, spend, refs, shot: { cam, recipe } });
+  meta.current = { title, prompt, brief, sceneId, aspect, spend, refs, shot: { cam, recipe } };
   async function save(extra?: { v?: Version[]; h?: number; t?: Take[]; m?: Msg[]; cam?: string | null }) {
     const v = extra?.v ?? versions; if (!v.length) return;
     let thumb: string | undefined;
@@ -255,8 +290,9 @@ export default function Studio() {
     try { const c = extra?.cam ?? scene?.cameras[0] ?? cam; if (c) thumb = await blobToDataUrl(new Blob([await bridge.current!.thumb(c)], { type: "image/jpeg" })); } catch { /* no thumb */ }
     const chat = (extra?.m ?? msgs).filter((m) => m.kind !== "concept" || m.url.startsWith("data:"));
     try {
-      const { title, prompt, brief, sceneId, aspect, spend } = meta.current;
-      const { id } = await api<{ id: string }>("/api/scenes", { json: { id: sceneId ?? undefined, title, prompt, brief, aspect, spend, versions: v,
+      const { title, prompt, brief, sceneId, aspect, spend, refs, shot } = meta.current;
+      const { id } = await api<{ id: string }>("/api/scenes", { json: { id: sceneId ?? undefined, title, prompt, brief, aspect, spend, shot, versions: v,
+        refs: refs.map((r) => (r.label ? { url: r.url, label: r.label } : { url: r.url })),
         head: extra?.h ?? head, chat, takes: extra?.t ?? takes, thumb } });
       setSceneId(id); meta.current.sceneId = id; refreshScenes();
     } catch { /* saving is best effort; the set stays in the page */ }
@@ -264,11 +300,46 @@ export default function Studio() {
 
   live.current = { direct, commitVersion, push };
 
+  // ---------- reference pictures (≤ 5): uploads, drops, and past generations (concept, look still, a take's frame) ----------
+  /** Adds what fits (each picture normalized to a JPEG ≤ 1536 px); says plainly what was refused and why. */
+  async function addRefs(items: { src: Blob; from: string; label?: string }[]): Promise<{ added: number; note: string | null }> {
+    const ok: RefPic[] = []; let bad = 0;
+    for (const it of items) {
+      if (it.src.type && !/^image\/(png|jpeg|webp)$/.test(it.src.type)) { bad++; continue; }
+      try { ok.push({ url: await fileToDataUrl(it.src), from: it.from, ...(it.label ? { label: it.label } : {}) }); } catch { bad++; }
+    }
+    const room = MAX_REFS - refsNow.current.length, take = ok.slice(0, Math.max(0, room));
+    const note = ok.length > take.length ? `Up to ${MAX_REFS} reference pictures: ${take.length ? `${ok.length - take.length} not added. ` : ""}Remove one to add another.`
+      : bad ? `${bad === items.length ? "That file is" : `${bad} file${bad > 1 ? "s are" : " is"}`} not a PNG, JPEG or WebP picture.` : null;
+    setRefNote(note);
+    if (take.length) { const next = [...refsNow.current, ...take]; refsNow.current = next; refsSave.current = true; setRefs(next); }
+    return { added: take.length, note };
+  }
+  async function refFromUrl(url: string, from: string) { const r = await fetch(url); if (!r.ok) throw new Error(`could not load the picture (${r.status})`); return addRefs([{ src: await r.blob(), from }]); }
+  function removeRef(i: number) { const next = refsNow.current.filter((_, k) => k !== i); refsNow.current = next; refsSave.current = true; setRefs(next); setRefNote(null); }
+  function labelRef(i: number, text: string) {
+    const label = text.replace(/\s+/g, " ").trim().slice(0, 60);
+    const next = refsNow.current.map((r, k) => (k === i ? { url: r.url, from: r.from, ...(label ? { label } : {}) } : r)); refsNow.current = next; refsSave.current = true; setRefs(next);
+  }
+  const refPayload = (list: RefPic[] = refs) => (list.length ? list.map((r) => (r.label ? { url: r.url, label: r.label } : r.url)) : undefined);
+  useEffect(() => { if (refsSave.current) { refsSave.current = false; if (view === "studio" && versions.length) save(); } }, [refs]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const takeVideo = useRef<HTMLVideoElement>(null);
+  /** The frame of the final video on screen now (a JPEG), as a reference. */
+  async function refFromFrame() {
+    const v = takeVideo.current; if (!v || !showing) throw new Error("show a take's final video first");
+    if (!v.videoWidth) throw new Error("the video frame is not ready yet");
+    const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext("2d")!.drawImage(v, 0, 0);
+    const b = await new Promise<Blob>((res, rej) => c.toBlob((x) => (x ? res(x) : rej(new Error("no frame"))), "image/jpeg", 0.92));
+    return addRefs([{ src: b, from: `frame of ${showing.take.label}` }]);
+  }
+  const dropRefs = { onDragOver: (e: React.DragEvent) => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); },
+    onDrop: (e: React.DragEvent) => { const fs = [...e.dataTransfer.files]; if (!fs.length) return; e.preventDefault(); addRefs(fs.map((f) => ({ src: f, from: "upload" }))); } };
+
   // ---------- start points ----------
   function startFromPrompt() {
     const text = homePrompt.trim(); if (!text) return;
-    const r = ref;
-    openStudio((a) => { a.push({ kind: "user", text, ref: r ?? undefined }); setPrompt(text); setTitle(text.slice(0, 60)); a.direct(text, undefined, r); });
+    const r = refs;
+    openStudio((a) => { a.push({ kind: "user", text, ...(r.length ? { refs: r.map((x) => x.url) } : {}) }); setPrompt(text); setTitle(text.slice(0, 60)); a.direct(text, undefined, r); });
     setHomePrompt("");
   }
   function openExample(ex: (typeof EXAMPLES)[number]) {
@@ -282,12 +353,16 @@ export default function Studio() {
   }
   function openSaved(id: string) {
     openStudio(async () => {
-      const s = await api<{ id: string; title: string; prompt: string; brief: Ready | null; versions: Version[]; head: number; chat: Msg[]; takes: Take[]; aspect?: Aspect; spend?: Spend }>(`/api/scenes/${id}`);
+      const s = await api<{ id: string; title: string; prompt: string; brief: Ready | null; versions: Version[]; head: number; chat: Msg[]; takes: Take[]; aspect?: Aspect; spend?: Spend; refs?: RefPic[]; shot?: { cam: string | null; recipe: Seg[] } }>(`/api/scenes/${id}`);
+      setRefs((s.refs ?? []).map((r) => ({ url: r.url, from: "saved", ...(r.label ? { label: r.label } : {}) }))); setRefNote(null);
       setSceneId(s.id); setTitle(s.title); setAspect(s.aspect ?? "16:9"); setSpend(s.spend ?? NO_SPEND); setPrompt(s.prompt); setBrief(s.brief); setVersions(s.versions); setHead(s.head);
       const opened = "Scene opened. Carry on where you left off.";   // once, not once per reopen
       setMsgs([...((s.chat || []) as Msg[]).filter((m) => !(m.kind === "note" && "text" in m && m.text === opened)), { kind: "note", text: opened }]); setTakes(s.takes || []);
-      setReloads((n) => n + 1); const r = await bridge.current!.load(s.versions[s.head]?.code ?? ""); setScene(r); setCam(r.cameras[0] ?? null); setBuilt(true);
-      if (r.cameras[0]) await bridge.current?.view(r.cameras[0]);
+      setReloads((n) => n + 1); const r = await bridge.current!.load(s.versions[s.head]?.code ?? ""); setScene(r); setBuilt(true);
+      // the shot as it was left (camera + moves with their cameras); scenes saved before 10-29 have none
+      const c = s.shot?.cam && r.cameras.includes(s.shot.cam) ? s.shot.cam : r.cameras[0] ?? null; setCam(c);
+      if (s.shot?.recipe?.length) { setRecipe(s.shot.recipe.map((x) => ({ move: x.move, seconds: x.seconds, ...(x.cam && r.cameras.includes(x.cam) ? { cam: x.cam } : {}) }))); setSel(0); }
+      if (c) await bridge.current?.view(c);
     });
   }
   /** Share: the set as a file another Open 3D Jutsu can open (versions, plan, format — no videos, no chat). */
@@ -331,16 +406,16 @@ export default function Studio() {
    * and, when asked, renders — no builder call. Lines that also change the set go to the builder as before.
    */
   function shotOnly(text: string) {
-    const si = shotIntent(text, MAX_SECONDS);
+    const si = shotIntent(text, MAX_SECONDS, scene?.cameras ?? []);
     const setWords = /\b(add|remove|delete|replace|change|put|place|paint|colou?r|bigger|smaller|darker|brighter|swap|build|create|more|less)\b|\bmake (it|them|the (?!video|clip|shot|film))/i;
     if (!si || setWords.test(text)) return false;
     if (si.recipe.length) { setRecipe(si.recipe); setSel(0); }
-    const shot = si.recipe.map((r) => `${label(r.move)} ${r.seconds} s`).join(", then ");
+    const shot = si.recipe.map((r, i) => `${i && r.cam && r.cam !== (si.recipe[i - 1].cam ?? cam) ? "cut to " : ""}${label(r.move)} ${r.seconds} s${r.cam ? ` (${camLabel(r.cam)})` : ""}`).join(", then ");
     if (si.render) { push({ kind: "note", text: `${shot ? `Shot set: ${shot}. ` : ""}Rendering it now.` }); setRenderSoon(true); }
     else push({ kind: "note", text: `Shot set: ${shot}. Press Render shot or say "film it" when you're ready.` });
     return true;
   }
-  useEffect(() => { if (renderSoon && !busy && cam) { setRenderSoon(false); renderShot(); } }, [renderSoon, recipeStr, busy, cam]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (renderSoon && !busy && cam) { setRenderSoon(false); requestRender(); } }, [renderSoon, recipeStr, busy, cam]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** Ask mode: an answer about the set or the idea; nothing is built or changed. */
   async function ask(question: string) {
     setBusy("Thinking");
@@ -349,10 +424,10 @@ export default function Studio() {
       addSpend(r.cost); push({ kind: "note", text: r.answer });
     } catch (e) { push({ kind: "error", text: (e as Error).message }); } finally { setBusy(null); }
   }
-  async function direct(p: string, withAnswers?: Record<string, string>, refUrl: string | null = ref) {
+  async function direct(p: string, withAnswers?: Record<string, string>, list: RefPic[] = refs) {
     setBusy("Reading your idea");
     try {
-      const refs = refUrl ? [refUrl] : undefined;
+      const refs = refPayload(list);
       const d = await api<Director & { cost?: Spend & { calls: number } }>("/api/director", { json: { prompt: p, answers: withAnswers, use: use("director"), refs, mode: chatMode === "chat" ? "auto" : chatMode } });
       addSpend(d.cost);
       if (d.status === "ask") { push({ kind: "questions", questions: d.questions }); return; }
@@ -411,7 +486,7 @@ export default function Studio() {
       for (let i = 0; i < d.batches.length; i++) {
         patchLast("build", (m) => ({ ...m, current: i }));
         const { code: add, cost } = await api<{ code: string; cost?: Spend & { calls: number } }>("/api/build", { json: { prompt: p, brief: d.brief, batches: d.batches, index: i,
-          codeSoFar: so, use: use("builder"), refs: ref ? [ref] : undefined } });
+          codeSoFar: so, use: use("builder"), refs: refPayload() } });
         addSpend(cost); buildSpend = { credits: buildSpend.credits + (cost?.credits ?? 0), usd: buildSpend.usd + (cost?.usd ?? 0), unreported: buildSpend.unreported + (cost?.unreported ?? 0) };
         const note = `Build step ${i + 1}: ${d.batches[i]}`; const res = await commitVersion(joinCode(so, add), note, v, h);
         const fixed = await repairFailed(so, add, `Build step: ${d.batches[i]}`, note, res.v, res.r);
@@ -421,7 +496,7 @@ export default function Studio() {
       setReloads((n) => n + 1); const r = await bridge.current!.load(so); setScene(r); setCam(r.cameras[0] ?? null); setBuilt(true);
       if (r.cameras[0]) await bridge.current?.view(r.cameras[0]);
       patchLast("build", (m) => ({ ...m, done: true }));
-      const si = shotIntent(p, MAX_SECONDS); if (si?.recipe.length) { setRecipe(si.recipe); setSel(0); }
+      const si = shotIntent(p, MAX_SECONDS, r.cameras); if (si?.recipe.length) { setRecipe(si.recipe.map((x) => (x.cam && !r.cameras.includes(x.cam) ? { move: x.move, seconds: x.seconds } : x))); setSel(0); }
       const done: Msg = { kind: "note", text: `The set is ready: ${r.stats.objects} objects, ${r.cameras.length} cameras.${failedParts.length ? ` ${failedParts.length} part${failedParts.length > 1 ? "s" : ""} could not be built and ${failedParts.length > 1 ? "were" : "was"} left out (${failedParts.slice(0, 2).join("; ").slice(0, 160)}).` : ""} ${shotIntent(p, MAX_SECONDS)?.recipe.length ? "The shot below is set from your prompt: press Render shot" : "Pick a camera and a move below"}, or tell me what to change.${money(buildSpend) ? ` Building cost ${money(buildSpend)}.` : ""}` };
       push(done); await save({ v, h, cam: r.cameras[0] ?? null });
     } catch (e) { push({ kind: "error", text: `Building stopped: ${(e as Error).message}` }); }
@@ -457,13 +532,29 @@ export default function Studio() {
   // A render that failed AFTER its frames were captured (a lost connection to the render server) continues from those
   // frames when Render shot is pressed again for the same shot — a 30 s shot captures for about an hour (10-29).
   const failedRender = useRef<{ key: string; id: string } | null>(null);
+  // ---------- approve before rendering (like Higgsfield's approve panel) ----------
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [alwaysRender, setAlwaysRender] = useState(() => { try { return localStorage.getItem("o3j.alwaysRender") === "1"; } catch { return false; } });
+  function requestRender() { if (alwaysRender) void renderShot(); else setApproveOpen(true); }
+  function approveRender(yes: boolean, always = false) {
+    setApproveOpen(false);
+    if (yes && always) { setAlwaysRender(true); try { localStorage.setItem("o3j.alwaysRender", "1"); } catch { /* private mode: this session only */ } }
+    if (yes) void renderShot();
+  }
+  /** Rough numbers measured on 10-29 renders (LTX-2.5 on one RTX PRO 6000): ~3.2 min per second of video at
+   *  1920×1088 plus ~3 min for capture and the look still; ~1.2 MB per second of 1920×1088 H.264. Scaled by pixels. */
+  const renderEstimate = () => {
+    const px = (ASPECTS[aspect].w * ASPECTS[aspect].h) / (1920 * 1088);
+    return { min: Math.round(3 + 3.2 * seconds * px), mb: Math.round(1.2 * seconds * px * (fps48On ? 3 : 1) * 10) / 10 };
+  };
   async function renderShot(resume?: string) {
     if (!cam || !bridge.current || busy) return;
     const b = bridge.current, fps = 24, n = frameCount(seconds, fps);
     const shotKey = `${sceneId}|${head}|${cam}|${recipeStr}|${aspect}`;
     const again = resume ?? (failedRender.current?.key === shotKey ? failedRender.current.id : null);
     let shotId: string | null = again, captured = !!again;
-    const shotLabel = `${recipe.map((r) => label(r.move)).join(", then ")}, ${seconds} s, from ${camLabel(cam)}`;
+    const shotLabel = cuts ? `${recipe.map((r, i) => `${i ? (segCam(i) !== segCam(i - 1) ? "cut to " : "then ") : ""}${label(r.move)} (${camLabel(segCam(i)!)})`).join(", ")}, ${seconds} s`
+      : `${recipe.map((r) => label(r.move)).join(", then ")}, ${seconds} s, from ${camLabel(segCam(0)!)}`;
     const steps = (s: Partial<Record<RStep, "wait" | "now" | "done">>) => patchLast("render", (m) => ({ ...m, steps: { ...m.steps, ...s } }));
     setBusy("Rendering"); setShowing(null);
     push({ kind: "render", label: shotLabel, steps: { clay: again ? "done" : "now", look: "wait", video: "wait" } });
@@ -483,17 +574,18 @@ export default function Studio() {
         }
       }
       captured = true; await b.interactive(true);
-      // One LTX job per ≤ 15 s segment (long shots overlap by 9 frames and are crossfaded, lib/render.ts planSegments).
-      const enc = await api<{ segs: [number, number][] | null }>(`/api/shots/${id}/encode`, { json: { fps, n } });
+      // One LTX job per part: ≤ 15 s each (long shots overlap by 9 frames and are crossfaded) and a new part at every
+      // usable camera cut (its own look still; hard join, no crossfade over the cut) — lib/render.ts planSegments.
+      const cutAt = cuts ? (await b.path(cam, recipeStr, n, fps)).flatMap((st, i) => (st.cut ? [i] : [])) : [];
+      const enc = await api<{ segs: [number, number][] | null }>(`/api/shots/${id}/encode`, { json: { fps, n, cuts: cutAt } });
       const segs = enc.segs ?? [[0, n]], long = segs.length > 1;
       let firstLook = "", video = "";
       for (const [k, [start]] of segs.entries()) {
-        if (long) setBusy(`Rendering part ${k + 1} of ${segs.length}`);
+        if (long) setBusy(`Rendering part ${k + 1} of ${segs.length}`);   // (a cut shot renders in parts too)
         const p = await b.prompt(cam, recipeStr, n, start);
         steps({ clay: "done", look: "now" });
-        const { raw, cost: lookCost } = await api<{ raw: string; cost?: Spend & { calls: number } }>(`/api/shots/${id}/look`,
-          { json: { prompt: p, use: use("look"), size: SIZE.look, format: SIZE.label, ...(long ? { seg: k, start, prevStart: k ? segs[k - 1][0] : 0 } : {}) } });
-        addSpend(lookCost); if (!k) { firstLook = raw; patchLast("render", (m) => ({ ...m, look: raw })); }
+        const raw = await lookFor(id, p, long ? { seg: k, start, prevStart: k ? segs[k - 1][0] : 0, cut: k > 0 && cutAt.includes(start) } : {});
+        if (!k) { firstLook = raw; patchLast("render", (m) => ({ ...m, look: raw })); }
         const img = await new Promise<HTMLImageElement>((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = raw; });
         // Cover-fit (centre crop), never stretch: the image model's frame is close to, not exactly, the clip's.
         const c = document.createElement("canvas"); c.width = SIZE.w; c.height = SIZE.h;
@@ -510,11 +602,11 @@ export default function Studio() {
           if (s.status === "failed" || s.status === "cancelled") throw new Error(`the video render${long ? ` (part ${k + 1})` : ""} ${s.status}`);
         }
       }
-      if (long) { setBusy("Joining the parts"); video = (await api<{ video: string }>(`/api/shots/${id}/stitch`, { json: { n, fps } })).video; }
+      if (long) { setBusy("Joining the parts"); video = (await api<{ video: string }>(`/api/shots/${id}/stitch`, { json: { n, fps, cuts: cutAt } })).video; }
       const take: Take = { id, label: shotLabel, video, clay: `/api/shots/${id}/file/clay.mp4`, thumb: firstLook };
       if (fps48On) {   // a failed 48 fps copy never costs the take: the 24 fps video is already saved
         setBusy("Making the 48 fps version");
-        try { const r = await api<{ video48: string; method: string; model?: string }>(`/api/shots/${id}/fps48`, { json: {} });
+        try { const r = await api<{ video48: string; method: string; model?: string }>(`/api/shots/${id}/fps48`, { json: { cuts: cutAt } });
           take.video48 = r.video48; take.by48 = r.method === "comfy" ? `ComfyUI ${r.model ?? ""}`.trim() : r.method; }
         catch (e) { push({ kind: "error", text: `The 48 fps version failed (${(e as Error).message}); the 24 fps video is kept.` }); }
       }
@@ -527,10 +619,33 @@ export default function Studio() {
     }
     finally { setBusy(null); }
   }
+  /** The photoreal look still of one shot (segment): the lit frame, the prompt and the user's reference pictures. */
+  async function lookFor(id: string, p: string, seg: Record<string, number | boolean> = {}) {
+    const { raw, cost } = await api<{ raw: string; cost?: Spend & { calls: number } }>(`/api/shots/${id}/look`,
+      { json: { prompt: p, use: use("look"), size: SIZE.look, format: SIZE.label, refs: refPayload(), ...seg } });
+    addSpend(cost); return raw;
+  }
+  /** Debug/test only: the shot's photoreal first frame without the video (the same look call a render makes). */
+  async function lookOnly() {
+    if (!cam || !bridge.current || busy) throw new Error("open a built set and pick a camera first");
+    const b = bridge.current, n = frameCount(seconds, 24);
+    setBusy("Painting the photoreal first frame");
+    push({ kind: "render", label: `${recipe.map((r) => label(r.move)).join(", then ")}, from ${camLabel(cam)} (first frame only)`, steps: { clay: "now", look: "wait", video: "wait" } });
+    try {
+      const { id } = await api<{ id: string }>("/api/shots", { method: "POST" });
+      await b.interactive(false); const [f] = await b.frames({ cam, move: recipeStr, n, fps: 24, w: SIZE.w, h: SIZE.h, mode: "lit", start: 0, count: 1 }); await b.interactive(true);
+      const form = new FormData(); form.set("mode", "lit"); form.set("start", "0"); form.append("f", new Blob([f], { type: "image/jpeg" }), "f0.jpg");
+      await api(`/api/shots/${id}/frames`, { form });
+      patchLast("render", (m) => ({ ...m, steps: { ...m.steps, clay: "done", look: "now" } }));
+      const raw = await lookFor(id, await b.prompt(cam, recipeStr, n, 0));
+      patchLast("render", (m) => ({ ...m, look: raw, steps: { ...m.steps, look: "done" } }));
+    } catch (e) { push({ kind: "error", text: `Look still stopped: ${(e as Error).message}` }); throw e; } finally { setBusy(null); }
+  }
   // ---------- custom camera path: keyframes from the orbit view ----------
-  const keys = pathKeys(code, cam);
+  const keys = pathKeys(code, segCam(sel));   // a path move flies its own camera's keyframes
   const segStart = (i: number) => recipe.slice(0, i).reduce((s, r) => s + r.seconds, 0);
   async function setKeys(next: number[][], note: string, own = false) {
+    const cam = segCam(sel);
     if (!cam || !bridge.current) return;
     const sorted = [...next].sort((a, b) => (a[7] ?? 0) - (b[7] ?? 0));
     const block = `kit.cameraPath('${cam}', ${JSON.stringify(sorted.map((k) => k.map((x) => Math.round(x * 100) / 100)))});`;
@@ -541,6 +656,7 @@ export default function Studio() {
   /** Key time (s from the start of the selected path move): the parked playhead when it is inside that move, else
    *  one second after the last key. Keys saved before timing get times spread over the move first. */
   async function addKey() {
+    const cam = segCam(sel);
     if (!cam || !bridge.current) return;
     const v = await bridge.current.viewState(), len = recipe[sel]?.seconds ?? 4, s0 = segStart(sel);
     const timed = keys.map((k, i) => (k.length >= 8 ? k : [...k.slice(0, 7), keys.length > 1 ? (i / (keys.length - 1)) * len : 0]));
@@ -552,18 +668,30 @@ export default function Studio() {
   }
   // ---------- timeline scrubbing: park the playhead at a time ----------
   const [park, setPark] = useState<number | null>(null);
+  const parkPose = useRef<unknown>(null);   // the camera state at the parked frame (debug state: tests check cuts there)
   const seeking = useRef(false);
   async function scrubTo(sec: number | null) {
     if (!bridge.current || !cam) return;
-    if (sec === null) { setPark(null); await bridge.current.seek(null); return; }
+    if (sec === null) { setPark(null); parkPose.current = null; await bridge.current.seek(null); return; }
     const t = Math.max(0, Math.min(seconds, sec)); setPark(t);
     let i = 0, acc = 0; while (i < recipe.length - 1 && t >= acc + recipe[i].seconds) acc += recipe[i++].seconds;
     setSel(i);
     if (seeking.current) return; seeking.current = true;   // drop drag moves while one seek is in flight
-    try { await bridge.current.seek(cam, recipeStr, Math.round(t * 24), frameCount(seconds, 24), 24); } finally { seeking.current = false; }
+    try { parkPose.current = (await bridge.current.seek(cam, recipeStr, Math.round(t * 24), frameCount(seconds, 24), 24))?.state ?? null; } finally { seeking.current = false; }
   }
   useEffect(() => { setPark(null); bridge.current?.seek(null); }, [cam, recipeStr]);   // a new shot unparks
   useEffect(() => { setFps48User(null); }, [cam, recipeStr]);
+  // A saved scene keeps its shot: a changed shot is saved a moment later (never during a render or build — save()
+  // takes a thumbnail through the viewport). The first shot after opening a scene is what was saved: no save.
+  const savedShot = useRef("");
+  useEffect(() => {
+    const k = `${sceneId}|${cam}|${recipeStr}`;
+    if (!sceneId || !cam || busy || !versions.length) return;
+    if (!savedShot.current.startsWith(`${sceneId}|`)) { savedShot.current = k; return; }
+    if (savedShot.current === k) return;
+    const t = setTimeout(() => { savedShot.current = k; save(); }, 1500);
+    return () => clearTimeout(t);
+  }, [sceneId, cam, recipeStr, busy]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {   // the set (head) and the frame format change the path / the measure too
     let live = true; setMotion(null);
     if (cam && viewerReady && built) bridge.current?.path(cam, recipeStr, frameCount(seconds, 24), 24)
@@ -571,6 +699,10 @@ export default function Studio() {
     return () => { live = false; };
   }, [cam, recipeStr, seconds, viewerReady, built, head, aspect]);   // eslint-disable-line react-hooks/exhaustive-deps
   async function downloadStill() {
+    if (showing) {   // a take: its photoreal first frame, the picture LTX filmed from (PNG at the clip's size)
+      const a = document.createElement("a"); a.href = `/api/shots/${showing.take.id}/file/look.png`;
+      a.download = `${title.slice(0, 40)}-take${takes.findIndex((t) => t.id === showing.take.id) + 1}.png`; a.click(); return;
+    }
     if (!cam || !bridge.current) return;
     const [f] = await bridge.current.frames({ cam, move: recipeStr, n: frameCount(seconds, 24), fps: 24, w: SIZE.w, h: SIZE.h, mode, start: 0, count: 1 });
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([f], { type: "image/jpeg" })); a.download = `${title.slice(0, 40)}-${camLabel(cam)}.jpg`; a.click();
@@ -606,12 +738,19 @@ export default function Studio() {
       <select aria-label="Chat mode" value={chatMode} disabled={!!busy} onChange={(e) => setChatMode(e.target.value as typeof chatMode)}>
         {(Object.keys(CHAT_MODES) as (keyof typeof CHAT_MODES)[]).map((m) => <option key={m} value={m}>{CHAT_MODE_HELP[m]}</option>)}
       </select></label>);
-  const refChip = (id: string) => ref ? (
-    <span className="pill on"><img className="refthumb" src={ref} alt="Reference" style={{ height: 22, width: 34 }} />Reference
-      <button className="x" style={{ background: "none", border: 0, padding: 0, color: "inherit" }} aria-label="Remove reference" onClick={() => setRef(null)}>×</button></span>
-  ) : (
-    <label className="pill" htmlFor={id} title="Attach a picture for the style">{Icon.image}Reference
-      <input id={id} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={async (e) => { const f = e.target.files?.[0]; if (f) setRef(await fileToDataUrl(f)); e.target.value = ""; }} /></label>);
+  const refChip = (id: string) => (<>
+    {refs.map((r, i) => (
+      <span key={i} className="pill on" title={`${r.label ? `${r.label}. ` : ""}Click the picture to say what it shows${r.from && r.from !== "upload" ? ` (from ${r.from})` : ""}`}>
+        <img className="refthumb" src={r.url} alt={r.label || `Reference ${i + 1}`} style={{ height: 22, width: 34, cursor: "pointer" }}
+          onClick={() => { const t = window.prompt("What does this picture show? (optional, e.g. the woman, her car)", r.label ?? ""); if (t !== null) labelRef(i, t); }} />
+        {r.label ? r.label.slice(0, 16) : refs.length > 1 ? `${i + 1}` : "Reference"}
+        <button className="x" style={{ background: "none", border: 0, padding: 0, color: "inherit" }} aria-label={`Remove reference ${i + 1}`} onClick={() => removeRef(i)}>×</button></span>))}
+    {/* At 5 the chip stays: a 6th (picked or dropped) gets the same plain refusal as everywhere else. */}
+    <label className="pill" htmlFor={id} title={refs.length >= MAX_REFS ? "Remove a reference picture to add another"
+      : `Up to ${MAX_REFS} pictures of the place, people or things (or drop them here). They guide the plan, the build and the look of every render.`}>
+      {Icon.image}{refs.length ? `${refs.length < MAX_REFS ? "Add " : ""}${refs.length}/${MAX_REFS}` : "Reference"}
+      <input id={id} data-o3j="ref" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(e) => { const fs = [...(e.target.files ?? [])]; e.target.value = ""; if (fs.length) addRefs(fs.map((f) => ({ src: f, from: "upload" }))); }} /></label>
+    {refNote && <span className="note error" role="status">{refNote}</span>}</>);
 
   // ---------- cost preview (P6): mean of this machine's recent build steps with the chosen builder ----------
   const builderKey = `${use("builder")?.route}|${use("builder")?.model}`;
@@ -638,7 +777,7 @@ export default function Studio() {
     await save({ v, h: v.length - 1 });
   };
   const edit = useEditTools(viewerReady ? bridge.current : null, { enabled: view === "studio" && built && !showing && !busy,
-    record: recordEdit, onError: (text) => push({ kind: "error", text }), reloads, code });
+    record: recordEdit, onError: (text) => push({ kind: "error", text }), reloads, code, onEscape: () => { if (park !== null) void scrubTo(null); } });
 
   // ---------- debug API (?debug=1): every UI action callable from outside + state + action log ----------
   // Used by bench/debug_api.py (a browser kept open, screenshot after each action) for internal UI testing.
@@ -650,34 +789,45 @@ export default function Studio() {
       dbgLog.current.push(e);
       try { return await f(...args); } catch (err) { e.error = String((err as Error)?.message || err); throw err; }
     };
-    const acts: Record<string, (...a: any[]) => unknown> = {
+    const acts: Record<string, (...a: any[]) => any> = {
       home: () => { setView("home"); refreshScenes(); },
       openExample: (id: string) => { const ex = EXAMPLES.find((x) => x.id === id); if (!ex) throw new Error(`no example ${id}`); openExample(ex); },
       openBlank, openSaved: (id: string) => openSaved(id), renameScene: (id: string, t: string) => renameScene(id, t), deleteScene: (id: string) => deleteScene(id), shareFile: downloadSceneFile, addKey: () => addKey(), clearKeys: () => setKeys([], "Clear the path", true), seek: (s: number | null) => scrubTo(s),
       viewFrom: (c: string) => bridge.current?.view(c),   // move only the orbit view (tests: frame keyframes from other cameras)
       openSceneText: (text: string, name = "scene.o3j.json") => openSceneFile(new File([text], name, { type: "application/json" })),
       homePrompt: (text: string) => setHomePrompt(text), startFromPrompt,
-      ref: (dataUrl: string | null) => setRef(dataUrl),
+      ref: async (dataUrl: string | null) => { refsNow.current = []; setRefs([]); setRefNote(null); if (dataUrl) await acts.addRef(dataUrl); },   // replace all with one (null = none)
+      addRef: async (dataUrl: string, label?: string) => { const { added, note } = await addRefs([{ src: await (await fetch(dataUrl)).blob(), from: "upload", label }]); if (!added) throw new Error(note ?? "not added"); },
+      removeRef: (i: number) => removeRef(i), labelRef: (i: number, text: string) => labelRef(i, text),
+      refFromTake: async (i: number, what: "still" | "frame" = "still") => { const tk = takes[i]; if (!tk) throw new Error(`no take ${i}`);
+        if (what === "frame") return refFromFrame(); const r = await refFromUrl(`/api/shots/${tk.id}/file/look.png`, `take ${i + 1}`); if (!r.added) throw new Error(r.note ?? "not added"); },
+      refFromConcept: async () => { const m = [...msgs].reverse().find((x) => x.kind === "concept") as Extract<Msg, { kind: "concept" }> | undefined; if (!m) throw new Error("no concept picture");
+        const r = await refFromUrl(m.url, "concept picture"); if (!r.added) throw new Error(r.note ?? "not added"); },
+      refFromLook: async () => { const m = [...msgs].reverse().find((x) => x.kind === "render" && x.look) as Extract<Msg, { kind: "render" }> | undefined; if (!m?.look) throw new Error("no look still");
+        const r = await refFromUrl(m.look, "look still"); if (!r.added) throw new Error(r.note ?? "not added"); },
+      lookOnly: () => lookOnly(),
       aspect: (a: Aspect) => { if (!(a in ASPECTS)) throw new Error(`no aspect ${a}`); setAspect(a); },   // reference picture as a data: URL (null = remove)
       chat: (text: string) => setInput(text), send,
       answer: (qid: string, option: string) => setAnswers((a) => ({ ...a, [qid]: option })),
-      confirmChange: (apply: boolean) => confirmChange(apply),
+      confirmChange: (apply: boolean) => confirmChange(apply), startLength: (s: number) => setStartSeconds(s), escape: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+      ownAnswer: (id: string, text: string) => setAnswers((a) => ({ ...a, [id]: text })),
       continueQuestions: () => { const q = [...msgs].reverse().find((m) => m.kind === "questions") as Extract<Msg, { kind: "questions" }> | undefined;
         if (!q) throw new Error("no questions"); return direct(prompt, Object.fromEntries(q.questions.map((x) => [x.id, answers[x.id] ?? x.default]))); },
       buildThis: () => build(), concept: (on: boolean) => setConceptOn(!!on),
       model: (route: string, model: string) => setBuilderUse({ route, model }),
-      camera: (c: string) => { setCam(c); setShowing(null); return bridge.current?.view(c); },
+      camera: (c: string) => pickCam(c),
+      moveCamera: (i: number, c: string | null) => { if (!recipe[i]) throw new Error(`no move ${i}`); setMoveCam(i, c); },
       move: (i: number, m: string) => setRecipe((r) => r.map((x, k) => (k === i ? { ...x, move: m } : x))),
       length: (i: number, s: number) => setRecipe((r) => r.map((x, k) => (k === i ? { ...x, seconds: s } : x))),
-      addMove: (m = "arc-left", s = 4) => { setRecipe((r) => [...r, { move: m, seconds: s }]); setSel(recipe.length); },
-      select: (i: number) => setSel(i), preview, render: () => renderShot(), resumeRender: (id: string) => renderShot(id), undo: () => goto(head - 1), redo: () => goto(head + 1), version: (h: number) => goto(h),
+      addMove: (m = "arc-left", s = 4, c?: string | null) => addMove(m, s, c === undefined ? cam : c),
+      select: (i: number) => setSel(i), preview, render: () => renderShot(), requestRender: () => requestRender(), approveRender: (yes: boolean, always?: boolean) => approveRender(yes, always), resumeRender: (id: string) => renderShot(id), undo: () => goto(head - 1), redo: () => goto(head + 1), version: (h: number) => goto(h),
       mode: (m: "lit" | "clay") => { setMode(m); return bridge.current?.mode(m); },
       showTake: (i: number, m: "final" | "clay" | "side" = "final") => { const tk = takes[i]; if (tk) setShowing({ take: tk, mode: m }); },
       editMode: (m: "translate" | "rotate" | "scale" | null) => edit.acts.setMode(m), selectObject: (n: string | null, add = false) => edit.acts.select(n, !!add),
       selectMany: (names: string[]) => edit.acts.selectMany(names),
       editSelected: (e: { pos?: number[]; rot?: number[]; scale?: number }) => edit.acts.editSelected(e),
       duplicate: () => edit.acts.duplicate(), deleteSelected: () => edit.acts.remove(), addThing: (k: string) => edit.acts.add(k),
-      objectsPanel: () => edit.acts.toggleList(), scenePanel: (on: boolean) => edit.acts.scenePanel(on), setLight: (p: { color?: string; intensity?: number; on?: boolean }) => edit.acts.setLight(p),
+      objectsPanel: () => edit.acts.toggleList(), scenePanel: (on: boolean) => edit.acts.scenePanel(on), setLight: (p: { type?: string; color?: string; intensity?: number; on?: boolean }) => edit.acts.setLight(p), cameraToView: () => edit.acts.cameraToView(),
       sceneSettings: (p: { exposure?: number; lights?: number; background?: string | null }) => edit.acts.changeProps({ ...edit.props, ...p }),
       chatMode: (m: "auto" | "ask" | "go" | "chat") => setChatMode(m),
       library: (q: string) => edit.acts.searchLib(q), placeResult: (i = 0) => edit.acts.placeResult(i),
@@ -688,7 +838,10 @@ export default function Studio() {
     (window as any).__o3j = {
       act: Object.fromEntries(Object.entries(acts).map(([k, f]) => [k, wrap(k, f)])),
       state: () => ({ view, title, busy, scenes: scenes.map((s) => ({ id: s.id, title: s.title })), built, viewerReady, sceneId, head, versions: versions.length, notes: versions.map((v) => v.note), edit: { mode: edit.mode, sel: edit.sel?.name ?? null, names: edit.sel?.names ?? null, pos: edit.sel?.pos ?? null, rot: edit.sel?.rot ?? null, scale: edit.sel?.scale ?? null, light: edit.sel?.light ?? null, note: versions[head]?.note, props: edit.props, lib: edit.lib }, chatMode, thumbs: Object.keys(thumbs), scene: scene && { stats: scene.stats, cameras: scene.cameras, skipped: scene.skipped.length, floating: scene.floating ?? [] },
-        cam, recipe, sel, playhead, park, keys: keys.length, keyTimes: keys.map((k) => k[7] ?? null), takes: takes.map((x) => x.label), takes48: takes.filter((x) => x.video48).map((x) => ({ id: x.id, by: x.by48 })), fps48: { on: fps48On, auto: fps48Auto, user: fps48User, motion }, showing: showing && { take: showing.take.label, mode: showing.mode },
+        cam, recipe, recipeStr, cuts: recipe.map((_, i) => i > 0 && segCam(i) !== segCam(i - 1)), parkPose: parkPose.current, sel, playhead, park, startSeconds, answers, approve: approveOpen ? renderEstimate() : null, alwaysRender, keys: keys.length, keyTimes: keys.map((k) => k[7] ?? null), takes: takes.map((x) => x.label), takes48: takes.filter((x) => x.video48).map((x) => ({ id: x.id, by: x.by48 })), fps48: { on: fps48On, auto: fps48Auto, user: fps48User, motion }, showing: showing && { take: showing.take.label, mode: showing.mode },
+        refs: refs.map((r) => { const b64 = r.url.slice(r.url.indexOf(",") + 1); return { label: r.label ?? null, from: r.from ?? null, type: r.url.slice(5, r.url.indexOf(";")),
+          bytes: (b64.length * 3) / 4 - (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0) }; }), refNote,
+        looks: msgs.flatMap((m) => (m.kind === "render" && m.look ? [m.look] : [])), takeStill: showing ? `/api/shots/${showing.take.id}/file/look.png` : null,
         model: builderUse ?? config?.defaults.builder, routes: config?.routes, msgs: msgs.map((m) => ({ kind: m.kind, text: "text" in m ? m.text : undefined })) }),
       log: () => dbgLog.current.slice(-200),
       // bench/debug_api.py /click and /drag: page px of an object (a spot where a click picks it) / of a gizmo handle
@@ -708,7 +861,7 @@ export default function Studio() {
         <section className="hero">
           <h1>Prompt your 3D set</h1>
           <p>Describe a place. Film it with real camera moves. Get a photoreal shot.</p>
-          <div className="composer-card">
+          <div className="composer-card" {...dropRefs}>
             <textarea value={homePrompt} onChange={(e) => setHomePrompt(e.target.value)} placeholder="Describe the place you want to film…" rows={2}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startFromPrompt(); } }} />
             <div className="chips">
@@ -717,8 +870,12 @@ export default function Studio() {
               {modelChip()}
               <button className={`pill ${conceptOn ? "on" : ""}`} aria-pressed={conceptOn} onClick={() => setConceptOn(!conceptOn)} title="Show a concept picture before building">{Icon.image}Concept picture</button>
               {aspectChip()}
+              <label className="pill" title="Shot length (you can also write it in the prompt)">{Icon.clock}{startSeconds} s
+                <select aria-label="Shot length" value={startSeconds} onChange={(e) => setStartSeconds(Number(e.target.value))}>
+                  {START_SECONDS.map((s) => <option key={s} value={s}>{s} s</option>)}</select></label>
+              {homePrompt.length > MAX_PROMPT * 0.8 && <span className={`count ${homePrompt.length > MAX_PROMPT ? "over" : ""}`}>{homePrompt.length} / {MAX_PROMPT}</span>}
             </div>
-            <button className="run go" disabled={!homePrompt.trim() || !config?.routes.length} onClick={startFromPrompt}>Build set</button>
+            <button className="run go" disabled={!homePrompt.trim() || homePrompt.length > MAX_PROMPT || !config?.routes.length} onClick={startFromPrompt}>Build set</button>
           </div>
           {config && !config.routes.length && <p className="note">No model route is set up. Add COMFY_API_KEY for Comfy Router, or log in to the Codex CLI.</p>}
         </section>
@@ -777,13 +934,17 @@ export default function Studio() {
         <aside className="panel" aria-label="Chat">
           <div className="msgs">
             {msgs.map((m, i) => {
-              if (m.kind === "user") return <div key={i} className="msg user">{m.text}{m.ref && <img src={m.ref} alt="Reference" />}</div>;
+              if (m.kind === "user") return <div key={i} className="msg user">{m.text}{m.ref && <img src={m.ref} alt="Reference" />}
+                {m.refs && <span className="refrow">{m.refs.map((u, k) => <img key={k} src={u} alt={`Reference ${k + 1}`} />)}</span>}</div>;
               if (m.kind === "error") return <div key={i} className="msg bot error" role="alert">{m.text}</div>;
               if (m.kind === "note") return <div key={i} className="msg bot">{m.text}{m.detail && <ul>{m.detail.map((d) => <li key={d}>{d}</li>)}</ul>}</div>;
               if (m.kind === "questions") return (
                 <div key={i} className="msg bot">{m.questions.map((q) => (
                   <div className="question" key={q.id}><p>{q.question}</p>
-                    <div className="options">{q.options.map((o) => <button key={o} aria-pressed={(answers[q.id] ?? q.default) === o} onClick={() => setAnswers({ ...answers, [q.id]: o })}>{o}</button>)}</div></div>))}
+                    <div className="options">{q.options.map((o) => <button key={o} aria-pressed={(answers[q.id] ?? q.default) === o} onClick={() => setAnswers({ ...answers, [q.id]: o })}>{o}</button>)}
+                      <input className="own" aria-label={`Your own answer: ${q.question}`} placeholder="Or your own answer…" maxLength={200}
+                        value={answers[q.id] !== undefined && !q.options.includes(answers[q.id]) ? answers[q.id] : ""}
+                        onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value || q.default })} /></div></div>))}
                   <div className="row"><button className="action" disabled={!!busy} onClick={() => direct(prompt, Object.fromEntries(m.questions.map((q) => [q.id, answers[q.id] ?? q.default])))}>Continue</button></div>
                 </div>);
               if (m.kind === "confirm") return (
@@ -793,6 +954,7 @@ export default function Studio() {
                       <button className="ghost" disabled={!!busy} onClick={() => confirmChange(false)}>Cancel</button></div>}</div>);
               if (m.kind === "concept") return (
                 <div key={i} className="msg bot"><img className="wide" src={m.url} alt="Concept picture" /><span className="caption">Concept picture. The built set will differ in details.</span>
+                  <button className="ghost small" disabled={refs.length >= MAX_REFS} onClick={() => refFromUrl(m.url, "concept picture").catch((e) => setRefNote((e as Error).message))}>Use as reference</button>
                   {!built && !busy && i === msgs.length - 1 && <div className="row"><button className="action" onClick={() => build()}>Build this set</button>
                     <button className="ghost" onClick={() => direct(prompt)}>Try another</button></div>}</div>);
               if (m.kind === "build") return (
@@ -803,16 +965,18 @@ export default function Studio() {
                 <div key={i} className="msg bot"><div className="msghead">Shot: {m.label}</div>
                   <div className="steps">{([["clay", "Clay and lit passes"], ["look", "Photoreal first frame"], ["video", "Video, LTX-2.5 Layout-To-Render"]] as [RStep, string][]).map(([k, t]) => (
                     <div key={k} className={`s ${m.steps[k]}`}><span className="mark">{m.steps[k] === "done" ? "✓" : m.steps[k] === "now" ? "●" : "○"}</span><span>{t}</span></div>))}</div>
-                  {m.look && <img className="wide" src={m.look} alt="Photoreal first frame" />}</div>);
+                  {m.look && <><img className="wide" src={m.look} alt="Photoreal first frame" />
+                    <button className="ghost small" disabled={refs.length >= MAX_REFS} onClick={() => refFromUrl(m.look!, "look still").catch((e) => setRefNote((e as Error).message))}>Use as reference</button></>}</div>);
               return null;
             })}
             {busy && <div className="msg bot typing">{busy}<span className="dots" /></div>}
             <div ref={chatEnd} />
           </div>
-          <form className="chatbox" onSubmit={(e) => { e.preventDefault(); send(); }}>
+          <form className="chatbox" onSubmit={(e) => { e.preventDefault(); send(); }} {...dropRefs}>
             <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder={placeholder}
               disabled={!viewerReady || !!busy} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
             <div className="row">{refChip("ref-chat")}{modeChip()}
+              {input.length > MAX_PROMPT * 0.8 && <span className={`count ${input.length > MAX_PROMPT ? "over" : ""}`}>{input.length} / {MAX_PROMPT}</span>}
               {!brief && <button type="button" className={`pill ${conceptOn ? "on" : ""}`} aria-pressed={conceptOn} onClick={() => setConceptOn(!conceptOn)}>Concept picture</button>}</div>
             <button className="run" type="submit" disabled={!input.trim() || !!busy || !viewerReady}>{chatMode === "chat" ? "Ask" : !brief ? "Build set" : built ? "Apply change" : "Revise plan"}</button>
             <p className="note">{ROUTE_NOTE[use("builder")?.route ?? "router"]}
@@ -824,10 +988,10 @@ export default function Studio() {
         <main className="stage">
           <div className="viewer">
             <div className="screen">
-              {showing && showing.mode !== "side" && <video key={showing.mode + showing.take.id} src={showing.mode === "final" ? showing.take.video48 ?? showing.take.video : showing.take.clay} autoPlay loop muted playsInline controls />}
+              {showing && showing.mode !== "side" && <video key={showing.mode + showing.take.id} ref={showing.mode === "final" ? takeVideo : undefined} src={showing.mode === "final" ? showing.take.video48 ?? showing.take.video : showing.take.clay} autoPlay loop muted playsInline controls />}
               <iframe ref={iframe} title="3D set" src="/scenekit/studio.html" sandbox="allow-scripts"
                 style={{ visibility: showing && showing.mode !== "side" ? "hidden" : "visible", width: showing?.mode === "side" ? "50%" : "100%" }} />
-              {showing?.mode === "side" && <video src={showing.take.video} autoPlay loop muted playsInline style={{ left: "50%", width: "50%" }} />}
+              {showing?.mode === "side" && <video ref={takeVideo} src={showing.take.video} autoPlay loop muted playsInline style={{ left: "50%", width: "50%" }} />}
               {!showing && aspect !== "16:9" && <div className="frame-guide" aria-hidden style={{ aspectRatio: `${SIZE.w} / ${SIZE.h}` }} />}
               {edit.ui}
               {!versions.length && <div className="screen-empty">{busy ? `${busy}…` : brief ? "Your 3D set appears here once it is built." : "Your 3D set appears here."}</div>}
@@ -842,7 +1006,7 @@ export default function Studio() {
 
             <div className="shotbar" aria-label="Shot">
               <div className="cams">{camsInOrder(scene?.cameras ?? []).map((c) => (
-                <button key={c} className="cam" aria-pressed={cam === c} onClick={() => { setCam(c); setShowing(null); bridge.current?.view(c); }}>
+                <button key={c} className="cam" aria-pressed={cam === c} onClick={() => pickCam(c)}>
                   {thumbs[c] ? <img src={thumbs[c]} alt="" /> : <div className="ph" />}<span>{camLabel(c)}</span></button>))}</div>
               <label className="pill" title="Camera move">{label(recipe[sel]?.move ?? "dolly-in")}
                 <select aria-label="Camera move" value={recipe[sel]?.move} onChange={(e) => setRecipe(recipe.map((r, i) => (i === sel ? { ...r, move: e.target.value } : r)))}>
@@ -850,16 +1014,30 @@ export default function Studio() {
               <label className="pill" title="Length of this move">{Icon.clock}{recipe[sel]?.seconds} s
                 <select aria-label="Length" value={recipe[sel]?.seconds} onChange={(e) => setRecipe(recipe.map((r, i) => (i === sel ? { ...r, seconds: Number(e.target.value) } : r)))}>
                   {[1, 2, 3, 4, 5, 6, 8, 10, 12, 15].map((s) => <option key={s} value={s} disabled={total - (recipe[sel]?.seconds ?? 0) + s > MAX_SECONDS}>{s} s</option>)}</select></label>
-              <button className="pill" disabled={total >= MAX_SECONDS} onClick={() => { setRecipe([...recipe, { move: "arc-left", seconds: Math.min(4, MAX_SECONDS - total) }]); setSel(recipe.length); }}>{Icon.plus}Add move</button>
+              {(scene?.cameras.length ?? 0) > 1 && <label className="pill" title="Camera of this move: another camera than the move before cuts to it">{Icon.frame}{segCam(sel) ? camLabel(segCam(sel)!) : "Camera"}
+                <select aria-label="Camera of this move" value={segCam(sel) ?? ""} onChange={(e) => (recipe.length === 1 ? pickCam(e.target.value) : setMoveCam(sel, e.target.value))}>
+                  {camsInOrder(scene?.cameras ?? []).map((c) => <option key={c} value={c}>{camLabel(c)}</option>)}</select></label>}
+              <button className="pill" disabled={total >= MAX_SECONDS} title="Chain another move, on the camera picked in the strip" onClick={() => addMove("arc-left", Math.min(4, MAX_SECONDS - total))}>{Icon.plus}Add move</button>
               {aspectChip(takes.length > 0)}
               <button className={`pill ${fps48On ? "on" : ""}`} aria-pressed={fps48On} onClick={() => setFps48User(!fps48On)}
                 title={`Also make a 48 fps copy (the 24 fps video is kept)${fps48Auto ? ": on by itself for this fast move" : ""}`}>48 fps</button>
               <span className="grow" />
-              <button className="ghost" disabled={!cam} onClick={downloadStill}>Still</button>
+              <button className="ghost" disabled={!cam && !showing} onClick={downloadStill} title={showing ? "The photoreal first frame of this take (PNG)" : "A picture of this frame of the set"}>Still</button>
               <button className="ghost" disabled={!scene} title="3D set with materials and textures (Blender, Unreal, Unity); Shift-click for geometry only" onClick={(e) => downloadGLB(e.shiftKey ? "clay" : "lit")}>GLB</button>
               {showing && <a className="ghost" href={showing.take.video} download>Video</a>}
               {showing?.take.video48 && <a className="ghost" href={showing.take.video48} download title={showing.take.by48 && `Made with ${showing.take.by48}`}>48 fps</a>}
-              <button className="action" disabled={!built || !cam || total > MAX_SECONDS || !!busy} onClick={() => renderShot()} title={total > 15 ? "Longer than 15 s: rendered in parts and joined" : undefined}>Render shot</button>
+              <button className="action" disabled={!built || !cam || total > MAX_SECONDS || !!busy} onClick={requestRender} title={total > 15 ? "Longer than 15 s: rendered in parts and joined" : undefined}>Render shot</button>
+              {approveOpen && !busy && (() => { const e = renderEstimate(); return (
+                <div className="approve" role="dialog" aria-label="Approve render">
+                  <div className="msghead">Render this shot?</div>
+                  <dl><dt>Video model</dt><dd>LTX-2.5 Layout-to-Render (your ComfyUI)</dd>
+                    <dt>Shot</dt><dd>{recipe.map((r) => `${label(r.move)} ${r.seconds} s`).join(", then ")} from {cam ? camLabel(cam) : "—"}</dd>
+                    <dt>Format</dt><dd>{aspect} · {ASPECTS[aspect].w}×{ASPECTS[aspect].h} · 24 fps{fps48On ? " + 48 fps copy" : ""} · MP4</dd>
+                    <dt>Estimate</dt><dd>about {e.min} min · about {e.mb} MB</dd></dl>
+                  <div className="row"><button className="action" onClick={() => approveRender(true)}>Render</button>
+                    <button className="ghost" onClick={() => approveRender(true, true)} title="Don't ask again in this browser">Render and always allow</button>
+                    <button className="ghost" onClick={() => approveRender(false)}>Cancel</button></div>
+                </div>); })()}
             </div>
 
             <div className="timeline" aria-label="Timeline">
@@ -869,9 +1047,10 @@ export default function Studio() {
                 onPointerDown={(e) => { if (playhead !== null || !cam) return; const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.setPointerCapture(e.pointerId); scrubTo(((e.clientX - r.left) / r.width) * track); }}
                 onPointerMove={(e) => { if (!e.buttons || playhead !== null || !cam) return; const r = e.currentTarget.getBoundingClientRect(); scrubTo(((e.clientX - r.left) / r.width) * track); }}>
                 {recipe.reduce<{ el: React.ReactNode[]; x: number }>((acc, r, i) => { const w = (r.seconds / track) * 100, x0 = acc.x;
-                  acc.el.push(<button key={i} className="seg-move" aria-pressed={sel === i} style={{ left: `${x0}%`, width: `calc(${w}% - 4px)` }} onClick={(e) => { if (e.detail === 0) setSel(i); }}
-                    title="Click or drag to look at a moment; this move is selected for changes">{label(r.move)} {r.seconds} s</button>);
-                  if (r.move === "path") for (const k of keys) if (k.length >= 8 && k[7] <= r.seconds)
+                  const cutHere = i > 0 && segCam(i) !== segCam(i - 1);
+                  acc.el.push(<button key={i} className={`seg-move${cutHere ? " cut" : ""}`} aria-pressed={sel === i} style={{ left: `${x0}%`, width: `calc(${w}% - 4px)` }} onClick={(e) => { if (e.detail === 0) setSel(i); }}
+                    title={`${cutHere ? "Cut to " : ""}${camLabel(segCam(i) ?? "")}: click or drag to look at a moment; this move is selected for changes`}>{label(r.move)} {r.seconds} s{cuts && segCam(i) ? <i className="seg-cam"> · {camLabel(segCam(i)!)}</i> : null}</button>);
+                  if (r.move === "path") for (const k of pathKeys(code, segCam(i))) if (k.length >= 8 && k[7] <= r.seconds)
                     acc.el.push(<span key={`k${i}-${k[7]}`} className="key" style={{ left: `${x0 + (k[7] / track) * 100}%` }} title={`Keyframe at ${k[7].toFixed(1)} s`} />);
                   acc.x += w; return acc; }, { el: [], x: 0 }).el}
                 {(playhead ?? (park !== null ? park / Math.max(1e-6, total) : null)) !== null && <span className="head" style={{ left: `${(playhead ?? park! / total) * (total / track) * 100}%` }} />}
@@ -879,7 +1058,7 @@ export default function Studio() {
               {recipe[sel]?.move === "path" && <span className="pill keys" title="Click the timeline to pick a time, frame the view, then add it: the camera passes through this view at that time">
                 {keys.length} keyframe{keys.length === 1 ? "" : "s"}{park !== null ? ` · at ${(park - segStart(sel)).toFixed(1)} s` : ""}
                 <button className="ghost" disabled={!cam || !!busy} onClick={addKey}>{Icon.plus}Add from view</button>
-                {keys.length > 0 && <button className="ghost" disabled={!!busy} onClick={() => setKeys([], `Clear the path of ${camLabel(cam!)}`, true)}>Clear</button>}</span>}
+                {keys.length > 0 && <button className="ghost" disabled={!!busy} onClick={() => setKeys([], `Clear the path of ${camLabel(segCam(sel)!)}`, true)}>Clear</button>}</span>}
               <span className="time">{playhead !== null ? `${(playhead * total).toFixed(1)} s / ` : park !== null ? `${park.toFixed(1)} s / ` : ""}{total} s of {MAX_SECONDS}
                 {recipe.length > 1 && <button className="x" style={{ background: "none", border: 0, color: "var(--muted)", marginLeft: 8 }} onClick={() => { setRecipe(recipe.filter((_, i) => i !== sel)); setSel(0); }}>Remove</button>}</span>
             </div>
@@ -887,7 +1066,11 @@ export default function Studio() {
 
           {takes.length > 0 && <nav className="takes" aria-label="Takes">{takes.map((t, i) => (
             <button key={t.id} className="take" aria-current={showing?.take.id === t.id} onClick={() => setShowing({ take: t, mode: "final" })}>
-              {t.thumb ? <img src={t.thumb} alt="" /> : null}<span><b>Take {i + 1}</b> {t.label}</span></button>))}</nav>}
+              {t.thumb ? <img src={t.thumb} alt="" /> : null}<span><b>Take {i + 1}</b> {t.label}</span></button>))}
+            {/* Past generations as references (Higgsfield): the shown take's photoreal still, or the video frame on screen. */}
+            {showing && <span className="take-refs">Use as reference:
+              <button className="ghost" disabled={refs.length >= MAX_REFS} title="This take's photoreal first frame" onClick={() => refFromUrl(`/api/shots/${showing.take.id}/file/look.png`, `take ${takes.findIndex((t) => t.id === showing.take.id) + 1}`).catch((e) => setRefNote((e as Error).message))}>Still</button>
+              <button className="ghost" disabled={refs.length >= MAX_REFS || showing.mode === "clay"} title="The video frame on screen now" onClick={() => refFromFrame().catch((e) => setRefNote((e as Error).message))}>Frame</button></span>}</nav>}
         </main>
       </div>
     </div>

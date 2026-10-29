@@ -24,6 +24,7 @@
     "bench/e2e_ui.py",
     "bench/e2e_edit.py",
     "bench/e2e_multiselect.py",
+    "bench/e2e_cuts.py",
     "bench/e2e_p7.py",
     "bench/e2e_library.py",
     "bench/e2e_newscene.py",
@@ -39,6 +40,9 @@
     "bench/scene_code_test.mts",
     "bench/shot_intent_test.mts",
     "bench/fps48_test.mts",
+    "bench/refs_test.mts",
+    "bench/e2e_refs.py",
+    "bench/cuts_test.mts",
     "docs/public/"
   ],
   "exclude": [

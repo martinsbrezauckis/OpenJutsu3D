@@ -133,40 +133,63 @@ function shake(s, t, a) {
 export const MOVES = Object.keys(DEFS);
 
 /**
- * Parse a shot recipe "move:seconds[:amount]+move:seconds[:amount]+…" (e.g. "dolly-in:4+arc-left:6:2.5+crane-up:5").
- * A plain move name ("arc-left") is a one-segment recipe. Returns [{move, seconds, amount}].
+ * Parse a shot recipe "move:seconds[:amount][@CAM_x]+…" (e.g. "dolly-in:4+arc-left:6:2.5@CAM_table+crane-up:5").
+ * A plain move name ("arc-left") is a one-segment recipe. `@CAM_x` names the segment's camera (camera cuts inside one
+ * shot); without it the segment uses the shot's camera. Returns [{move, seconds, amount, cam?}].
  */
 export function parseRecipe(recipe, defaultSeconds = 4) {
   return String(recipe).split('+').map(s => {
-    const [move, sec, amt] = s.split(':');
+    const [body, cam] = s.split('@'), [move, sec, amt] = body.split(':');
     if (!DEFS[move]) throw new Error(`unknown camera move '${move}' in recipe '${recipe}'`);
-    return { move, seconds: sec ? Number(sec) : defaultSeconds, amount: amt ? Number(amt) : 1 };
+    if (cam !== undefined && !/^CAM_[A-Za-z0-9_]{1,60}$/.test(cam)) throw new Error(`bad camera '${cam}' in recipe '${recipe}'`);
+    return { move, seconds: sec ? Number(sec) : defaultSeconds, amount: amt ? Number(amt) : 1, ...(cam ? { cam } : {}) };
   });
 }
+/** One recipe segment back to its string form (the inverse of parseRecipe for one segment). */
+export const segmentString = (s) => `${s.move}:${s.seconds}${s.amount != null && s.amount !== 1 ? `:${s.amount}` : ''}${s.cam ? `@${s.cam}` : ''}`;
 
 /**
- * Camera states for a whole multi-move shot: segment i starts exactly where segment i-1 ended, then the per-frame
- * sequence is smoothed with a centred moving average (window ≈ `smoothSeconds`) so the per-move ease-in/ease-out
- * does not make the camera stop between segments. Returns n states [{pos, lookAt, fov, roll}].
+ * Camera states for a whole multi-move shot. Segments on the same camera chain continuously: segment i starts exactly
+ * where segment i-1 ended, then the per-frame sequence is smoothed with a centred moving average (window ≈
+ * `smoothSeconds`) so the per-move ease-in/ease-out does not make the camera stop between segments.
+ * Camera cuts: `cams = { shot, at(name) }` (shot = the shot camera's name, at = a scene camera's start state or null).
+ * A segment whose camera differs from the previous segment's is a HARD CUT: it starts at that camera's own pose, and
+ * the smoothing never reaches across a cut. INVARIANT: a segment without `@CAM` (every recipe written before cuts, and
+ * every caller without `cams`) is the shot camera, so such recipes plan exactly as before.
+ * The frame on a cut's exact time already shows the new camera (shot k = frames [round(T_k·(n-1)/total), …)).
+ * Returns n states [{pos, lookAt, fov, roll, cam, seg, group, cut, from}] — cam = the camera of that frame ('' = the
+ * shot camera when `cams` is not given), seg = recipe segment, group = continuous run of segments on one camera,
+ * cut = first frame of a new camera (never frame 0), from = that run's starting camera position.
  */
-export function pathStates(recipe, start, n, fps = 24, smoothSeconds = 0.6) {
+export function pathStates(recipe, start, n, fps = 24, smoothSeconds = 0.6, cams = null) {
   const segs = parseRecipe(recipe);
-  const total = segs.reduce((s, x) => s + x.seconds, 0);
-  const starts = []; let cur = { ...start };
-  for (const s of segs) { starts.push(cur); const e = cameraAt(s.move, cur, 1, { amount: s.amount, seconds: s.seconds }); cur = { pos: e.pos, lookAt: e.lookAt, fov: e.fov, keys: start.keys }; }
-  const raw = [];
+  const total = segs.reduce((s, x) => s + x.seconds, 0), shot = cams?.shot ?? '';
+  const camOf = (s) => (s.cam && s.cam !== shot && cams?.at(s.cam) ? s.cam : shot);   // unknown camera = the shot camera
+  const starts = [], group = [], base = []; let cur = null, g = -1;
+  segs.forEach((s, k) => {
+    if (k === 0 || camOf(s) !== camOf(segs[k - 1])) { g++; cur = camOf(s) === shot ? { ...start } : { ...cams.at(camOf(s)) }; base[g] = cur; }
+    starts.push(cur); group.push(g);
+    const e = cameraAt(s.move, cur, 1, { amount: s.amount, seconds: s.seconds });
+    cur = { pos: e.pos, lookAt: e.lookAt, fov: e.fov, keys: base[g].keys };
+  });
+  const raw = [], gof = [];
   for (let i = 0; i < n; i++) {
     let t = (n > 1 ? i / (n - 1) : 0) * total, k = 0;
-    while (k < segs.length - 1 && t > segs[k].seconds) { t -= segs[k].seconds; k++; }
-    raw.push(cameraAt(segs[k].move, starts[k], Math.min(1, t / segs[k].seconds), { amount: segs[k].amount, seconds: segs[k].seconds }));
+    // a cut's own time belongs to the new camera (1e-9: float sums of the seconds)
+    while (k < segs.length - 1 && (t > segs[k].seconds || (group[k + 1] !== group[k] && t >= segs[k].seconds - 1e-9))) { t -= segs[k].seconds; k++; }
+    const st = cameraAt(segs[k].move, starts[k], Math.min(1, t / segs[k].seconds), { amount: segs[k].amount, seconds: segs[k].seconds });
+    raw.push({ ...st, cam: camOf(segs[k]), seg: k, group: group[k], cut: i > 0 && group[k] !== gof[i - 1], from: base[group[k]].pos });
+    gof.push(group[k]);
   }
-  if (segs.length === 1) return raw;
+  // smoothing only inside a run of several chained segments (one move alone keeps its exact ease, as before)
+  const runs = group.map((x) => group.filter((y) => y === x).length);
   const w = Math.max(1, Math.round(smoothSeconds * fps / 2));
   const avg = (key, i) => { let acc = null, c = 0;
     for (let j = Math.max(0, i - w); j <= Math.min(n - 1, i + w); j++) {
+      if (gof[j] !== gof[i]) continue;
       const v0 = raw[j][key]; acc = acc ? (Array.isArray(v0) ? acc.map((a, q) => a + v0[q]) : acc + v0) : (Array.isArray(v0) ? [...v0] : v0); c++; }
     return Array.isArray(acc) ? acc.map(a => a / c) : acc / c; };
-  return raw.map((s, i) => ({ ...s, pos: avg('pos', i), lookAt: avg('lookAt', i), fov: avg('fov', i), roll: avg('roll', i) }));
+  return raw.map((s, i) => (runs[s.seg] < 2 ? s : { ...s, pos: avg('pos', i), lookAt: avg('lookAt', i), fov: avg('fov', i), roll: avg('roll', i) }));
 }
 
 export function cameraAt(move, start, t, opts = {}) {

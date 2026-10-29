@@ -7,7 +7,8 @@ Endpoints (127.0.0.1 only):
   POST /open   {url?, width?, height?}        open/reload the app (default http://127.0.0.1:3000/?debug=1, 1600×900)
   POST /act    {name, args?, wait?, settle?}  run window.__o3j.act[name](...args); then wait `wait` s (default 1.5),
                                               or with settle=true until the app is not busy (max 3600 s; settle=<seconds> sets the cap — long shots); screenshot
-  POST /upload {path, wait?}                  give a file to the open Import input (library panel); path must lie under
+  POST /upload {path, wait?, target?}        give a file to the open Import input (library panel; target "ref" = the
+                                              Reference chip, `paths` = several pictures at once); path must lie under
                                               bench/out (e.g. bench/out/mixamo/*.fbx); waits until the import is done
   POST /click  {object? | x?, y?, mods?, wait?}  a real mouse click in the 3D view on a spot that picks `object` (or at
                                               page px x, y); mods: ["Shift"] / ["Control"] / ["Meta"] held during it
@@ -126,7 +127,14 @@ class Session:
         self.page.mouse.move(tx, ty, steps=12); time.sleep(0.3); self.page.mouse.up()
         time.sleep(float(wait)); r = self.reply(f"drag-{handle}"); r["at"] = [[hx, hy], [tx, ty]]; return r
 
-    def upload(self, path: str, wait=180.0):
+    def upload(self, path, wait=180.0, target="library"):
+        if target == "ref":   # the Reference chip's file input (home or chat): one or several pictures at once
+            before = self.page.evaluate("() => JSON.stringify([window.__o3j.state().refs, window.__o3j.state().refNote])")
+            self.page.set_input_files('input[type=file][data-o3j=ref]', path)
+            t0 = time.time()   # pictures are decoded and resized first: wait until the chip changes (or `wait` s)
+            while time.time() - t0 < float(wait) and self.page.evaluate("() => JSON.stringify([window.__o3j.state().refs, window.__o3j.state().refNote])") == before:
+                time.sleep(0.3)
+            time.sleep(0.5); return self.reply("upload-ref")
         # The Import input of the library panel (Add › library); then wait while the panel says Converting/Adding.
         self.page.set_input_files('input[type=file][accept*=".fbx"]', path)
         t0 = time.time(); time.sleep(1.0)
@@ -199,9 +207,11 @@ def main():
                 if self.path == "/key": return self.send(200, s.key(body.get("key"), body.get("where", "page"), body.get("wait", 1.0)))
                 if self.path == "/act": return self.send(200, s.act(body.get("name"), body.get("args"), body.get("wait", 1.5), body.get("settle", False)))
                 if self.path == "/upload":
-                    p, out = pathlib.Path(str(body.get("path", ""))).resolve(), (ROOT / "bench" / "out").resolve()
-                    if out not in p.parents or not p.is_file(): return self.send(400, {"ok": False, "error": "path must be a file under bench/out"})
-                    return self.send(200, s.upload(str(p), body.get("wait", 180)))
+                    out, target = (ROOT / "bench" / "out").resolve(), body.get("target", "library")
+                    if target not in ("library", "ref"): return self.send(400, {"ok": False, "error": "target: library or ref"})
+                    paths = [pathlib.Path(str(x)).resolve() for x in (body.get("paths") if target == "ref" and isinstance(body.get("paths"), list) else [body.get("path", "")])]
+                    if not paths or any(out not in p.parents or not p.is_file() for p in paths): return self.send(400, {"ok": False, "error": "path must be a file under bench/out"})
+                    return self.send(200, s.upload([str(p) for p in paths] if len(paths) > 1 else str(paths[0]), body.get("wait", 15 if target == "ref" else 180), target))
                 self.send(404, {"ok": False, "error": "unknown path"})
             except Exception as e:
                 try: shot = s.shot("error")

@@ -53,6 +53,15 @@ ok["no render → clear error"] = await r.make48("00000000-0000-4000-8000-000000
 delete process.env.O3J_INTERP; process.env.O3J_INTERP_MAX_GB = "0.0001"; utimesSync(join(d, "render.mp4"), new Date(Date.now() + 7000), new Date(Date.now() + 7000));
 const big = await r.make48(id); delete process.env.O3J_INTERP_MAX_GB;
 ok[`too big for ComfyUI → ffmpeg (${big.why})`] = big.method === "ffmpeg" && /GB of frames/.test(big.why ?? "");
+// a camera cut: red 24 frames, blue from frame 24 → the 48 fps frame between them (47) is one camera, never a red/blue blend
+const idc = "00000000-0000-4000-8000-000000000050", dc = r.shotDir(idc); mkdirSync(dc, { recursive: true });
+execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=192x108:r=24:d=1", "-f", "lavfi", "-i", "color=c=blue:s=192x108:r=24:d=2",
+  "-filter_complex", "[0][1]concat=n=2:v=1,trim=end_frame=49", "-c:v", "libx264", "-pix_fmt", "yuv420p", join(dc, "render.mp4")]);
+process.env.O3J_INTERP = "ffmpeg"; const cut = await r.make48(idc, [24]), pc = await r.probeVideo(cut.file);
+const px = (k: number) => [...execFileSync("ffmpeg", ["-v", "error", "-i", cut.file, "-vf", `select=eq(n\\,${k}),scale=1:1`, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])];
+const [f46, f47, f48] = [46, 47, 48].map(px);
+ok[`cut kept hard at 48 fps: ${pc.n} f, frame 47 ${f47} (46 ${f46}, 48 ${f48})`] = pc.n === 97 && pc.fps === "48/1" && f46[0] > 200 && f48[2] > 200 && f48[0] < 60
+  && ((f47[0] > 230 && f47[2] < 25) || (f47[2] > 230 && f47[0] < 25));
 // ComfyUI unreachable → ffmpeg, and the reason is recorded
 delete process.env.O3J_INTERP; process.env.COMFY_BASE_URL = "http://127.0.0.1:9"; utimesSync(join(d, "render.mp4"), new Date(Date.now() + 9000), new Date(Date.now() + 9000));
 const t0 = Date.now(), down = await r.make48(id);

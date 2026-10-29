@@ -42,13 +42,31 @@ export async function encodeFrames(id: string, mode: "clay" | "lit", fps: number
  * look still and LTX job, and the overlaps are crossfaded in stitch(). Frame counts stay 8k+1 (starts are multiples of 8).
  */
 export const SEG_MAX = 361, SEG_OVERLAP = 9;
-export function planSegments(n: number): [number, number][] {
-  if (n <= SEG_MAX) return [[0, n]];
+function overlapParts(a: number, n: number): [number, number][] {
+  if (n <= SEG_MAX) return [[a, n]];
   // Balanced parts (a 30 s shot = 3 × ~10 s, not 15 + 15 + a 17-frame tail): K parts, step a multiple of 8 (so every part
   // stays 8k+1 frames), each part = step + overlap frames, the last one takes the rest (≤ step + overlap by construction).
   const K = Math.ceil((n - SEG_OVERLAP) / (SEG_MAX - SEG_OVERLAP)), step = 8 * Math.ceil((n - SEG_OVERLAP) / K / 8);
-  return Array.from({ length: K }, (_, k): [number, number] => [k * step, k === K - 1 ? n - k * step : step + SEG_OVERLAP]);
+  return Array.from({ length: K }, (_, k): [number, number] => [a + k * step, k === K - 1 ? n - k * step : step + SEG_OVERLAP]);
 }
+/**
+ * `cuts` = frames where the shot cuts to another camera (the first frame of the new camera). Every usable cut starts
+ * a part of its own, in short shots too: each camera then gets its own look still (one look still for the first
+ * camera left the later cameras' people as grey mannequins, 10-29), and no crossfade blends two cameras. The part
+ * before a cut ends one frame after it (8k+1 frames needs it) and the next part starts at the cut — a 1-frame overlap,
+ * joined in stitch() as a hard cut that drops that extra frame. Usable cuts are multiples of 8 (whole seconds at
+ * 24 fps); other cuts stay inside a part. Parts longer than 361 frames overlap and crossfade as before; without usable
+ * cuts the plan is exactly the old one.
+ */
+export function planSegments(n: number, cuts: number[] = []): [number, number][] {
+  const hard = [...new Set(cuts)].filter((c) => Number.isInteger(c) && c > 0 && c < n - 1 && c % 8 === 0).sort((x, y) => x - y);
+  const out: [number, number][] = []; let a = 0;
+  for (const c of hard) { out.push(...overlapParts(a, c - a + 1)); a = c; }
+  out.push(...overlapParts(a, n - a));
+  return out;
+}
+/** Valid cut frames from a request body (the client sends the viewer plan's cut frames). */
+export const cutFrames = (x: unknown, n: number) => (Array.isArray(x) ? x.slice(0, 200).filter((c) => Number.isInteger(c) && c > 0 && c < n) as number[] : []);
 /** Segment k's clay video from frames [start, start+len). */
 export async function encodeSegment(id: string, k: number, start: number, len: number, fps: number) {
   const d = shotDir(id);
@@ -77,12 +95,16 @@ function channelStats(file: string, from: number, count: number): Promise<{ mean
  * Crossfade the segments' renders (overlap = SEG_OVERLAP frames) into render.mp4. Each segment is first colour-matched
  * to the previous one over their shared frames (per-channel level + contrast; the image model never matches a look
  * exactly — measured 10-29: part 2 of a 16 s shot came out cooler and ~15% darker), so the crossfade joins equal looks.
+ * A 1-frame overlap is a boundary on a camera cut (planSegments): the earlier part's last frame is dropped and the
+ * parts are joined as a hard cut, not colour-matched (the two sides show different views).
  */
 export async function stitch(id: string, segs: [number, number][], fps: number) {
   const d = shotDir(id), ov = SEG_OVERLAP / fps;
   const files = [join(d, "render_s0.mp4")];
+  const hardAt = (k: number) => segs[k - 1][0] + segs[k - 1][1] - segs[k][0] === 1;   // join k (before segment k) is a cut
   for (let k = 1; k < segs.length; k++) {
     const prev = files[k - 1], cur = join(d, `render_s${k}.mp4`), out = join(d, `render_s${k}_matched.mp4`);
+    if (hardAt(k)) { files.push(cur); continue; }
     const a = await channelStats(prev, segs[k - 1][1] - SEG_OVERLAP, SEG_OVERLAP), b = await channelStats(cur, 0, SEG_OVERLAP);
     const lut = ["r", "g", "b"].map((ch, c) => {
       const gain = Math.min(1.4, Math.max(0.7, a.std[c] / b.std[c])), off = a.mean[c] - gain * b.mean[c];
@@ -92,11 +114,13 @@ export async function stitch(id: string, segs: [number, number][], fps: number) 
     files.push(out);
   }
   const inputs = files.flatMap((f) => ["-i", f]);
-  let chain = "", prev = "[0:v]", t = segs[0][1] / fps;
+  // a part before a hard join loses its last frame (the cut frame, rendered again as the next part's first)
+  const len = segs.map(([, l], k) => (k + 1 < segs.length && hardAt(k + 1) ? l - 1 : l));
+  let chain = segs.map((_, k) => `[${k}:v]trim=end_frame=${len[k]},setpts=PTS-STARTPTS[p${k}];`).join(""), prev = "[p0]", t = len[0] / fps;
   for (let k = 1; k < segs.length; k++) {
     const out = k === segs.length - 1 ? "[v]" : `[x${k}]`;
-    chain += `${prev}[${k}:v]xfade=transition=fade:duration=${ov}:offset=${(t - ov).toFixed(4)}${out};`;
-    prev = out; t += segs[k][1] / fps - ov;
+    chain += hardAt(k) ? `${prev}[p${k}]concat=n=2:v=1:a=0${out};` : `${prev}[p${k}]xfade=transition=fade:duration=${ov}:offset=${(t - ov).toFixed(4)}${out};`;
+    prev = out; t += len[k] / fps - (hardAt(k) ? 0 : ov);
   }
   await ffmpeg([...inputs, "-filter_complex", chain.replace(/;$/, ""), "-map", "[v]", "-r", String(fps), "-c:v", "libx264", "-crf", "16",
     "-pix_fmt", "yuv420p", join(d, "render.mp4")]);
@@ -180,9 +204,11 @@ async function interpComfy(id: string, src: string, model: string, raw: string) 
   if (!o) throw new Error(`ComfyUI job has no output named ${tag} (${job.outputs.map((x) => x.name).join(", ")})`);
   await o.toFile(raw);
 }
-export type Made48 = { file: string; method: "comfy" | "ffmpeg" | "unknown"; model?: string; ms?: number; why?: string; fixed?: string };
+export type Made48 = { file: string; method: "comfy" | "ffmpeg" | "unknown"; model?: string; ms?: number; why?: string; fixed?: string; cuts?: number };
 const making48 = new Map<string, Promise<Made48>>();
-export function make48(id: string): Promise<Made48> {
+/** `cuts` = camera-cut frames of the 24 fps render: the in-between frame at a cut (2c−1) would blend two cameras, so it
+ *  is dropped and cfr refills the gap with a neighbour (the cut lands up to 1/48 s early; the count stays 2n−1). */
+export function make48(id: string, cuts: number[] = []): Promise<Made48> {
   const d = shotDir(id), out = join(d, "render48.mp4"), meta = join(d, "render48.json");
   if (making48.has(id)) return making48.get(id)!;   // one job per shot (a second call joins it)
   const job = (async (): Promise<Made48> => {
@@ -213,6 +239,13 @@ export function make48(id: string): Promise<Made48> {
       await ffmpeg(["-i", src, "-vf", "tpad=stop_mode=clone:stop=2,minterpolate=fps=48:mi_mode=mci", "-frames:v", String(2 * n - 1),
         "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", tmp]);
       r = { method: "ffmpeg", why };
+    }
+    const hard = cutFrames(cuts, n);
+    if (hard.length) {
+      const held = join(d, "render48.cut.mp4");
+      await ffmpeg(["-i", tmp, "-vf", `select='not(${hard.map((c) => `eq(n\,${2 * c - 1})`).join("+")})'`, "-fps_mode", "cfr", "-r", "48",
+        "-frames:v", String(2 * n - 1), "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", held]);
+      await rename(held, tmp); r = { ...r, cuts: hard.length };
     }
     const made = { ...r, ms: Date.now() - t0 };
     await writeFile(meta, JSON.stringify(made)); await rename(tmp, out);   // meta first: render48.mp4 never shows stale meta

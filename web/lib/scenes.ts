@@ -1,7 +1,7 @@
 /**
  * scenes.ts — "My scenes": saved sets on this machine (DATA_DIR/scenes/<id>/scene.json + thumb.jpg). A scene keeps
  * everything needed to reopen and keep working: the prompt, the director's brief, the scene code (= the set), the
- * version history (every build/change step, for undo and restore) and the chat. Server only.
+ * version history (every build/change step, for undo and restore), the chat and the reference pictures. Server only.
  */
 import { mkdir, readdir, readFile, rename, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,7 +10,9 @@ import { DATA_DIR } from "./render";
 
 export type Version = { code: string; note: string; at: string };
 export type SavedScene = { id: string; title: string; prompt: string; brief: unknown; versions: Version[]; head: number;
-  chat: unknown[]; takes: unknown[]; aspect?: Aspect; spend?: { credits: number; usd: number; unreported: number }; updated: string };
+  chat: unknown[]; takes: unknown[]; refs?: { url: string; label?: string }[]; aspect?: Aspect; spend?: { credits: number; usd: number; unreported: number }; shot?: Shot; updated: string };
+/** The shot bar: the strip's camera + the moves, each with its own camera when it cuts to another one (Studio.tsx Seg). */
+export type Shot = { cam: string | null; recipe: { move: string; seconds: number; cam?: string }[] };
 export type Aspect = "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9";
 const dir = (id: string) => { if (!/^[a-z0-9-]{8,64}$/.test(id)) throw new Error("bad scene id"); return join(DATA_DIR, "scenes", id); };
 

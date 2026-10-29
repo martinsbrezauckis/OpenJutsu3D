@@ -414,6 +414,16 @@ export class SceneKit {
    * Custom camera path (the app's "Add keyframe from this view"): keys = [[x, y, z, lookX, lookY, lookZ, fov], …] in
    * shot order; the 'path' move flies a smooth curve through them. A later call for the same camera replaces its keys.
    */
+  /** Move an existing camera to a view (the app's "Set to view"), keeping its path keys: kit.cameraView('CAM_main', { pos, lookAt, fov }). */
+  cameraView(name, { pos, lookAt, fov } = {}) {
+    const c = this.cameras.find(x => x.name === name);
+    if (!c) throw new Error(`cameraView: no camera '${name}'`);
+    if (pos) { c.position.set(...pos); c.userData.basePos = [...pos]; c.userData.pivot = [...pos]; }
+    if (lookAt) { c.userData.lookAt = lookAt; c.userData.baseLook = [...lookAt]; }
+    c.lookAt(...c.userData.lookAt);
+    if (fov) { c.fov = fov; c.updateProjectionMatrix(); }
+    return c;
+  }
   cameraPath(name, keys) {
     const c = this.cameras.find(x => x.name === name);
     if (!c) throw new Error(`cameraPath: no camera '${name}'`);
@@ -688,9 +698,16 @@ export class SceneKit {
    * Change a light IN PLACE (the app's light panel writes these lines; a later line for the same light replaces it):
    *   kit.lightProps('LGT_key', { color: '#ffd09a', intensity: 4, on: true })
    */
-  lightProps(name, { color, intensity, on } = {}) {
-    const l = this.root.getObjectByName(name);
+  lightProps(name, { type, color, intensity, on } = {}) {
+    let l = this.root.getObjectByName(name);
     if (!l?.isLight) throw new Error(`lightProps: no light '${name}'`);
+    // another kind of light (point / spot / sun / area): rebuilt under the same name where it stands now, aimed at the
+    // same target, same colour and brightness — then the remaining props apply as usual
+    if (type && type !== l.userData.type) {
+      const pos = l.position.toArray(), target = l.target ? l.target.position.toArray() : l.userData.baseTarget ?? [0, 0, 0];
+      l = this.light(name, { type, pos, target, color: '#' + l.color.getHexString(), intensity: l.intensity, distance: l.distance || 0,
+        angleDeg: l.angle ? l.angle / DEG : 35, width: l.width || 1, height: l.height || 1 });
+    }
     if (color !== undefined) l.color.set(color);
     if (intensity !== undefined) l.intensity = Math.max(0, Number(intensity) || 0);
     if (on !== undefined) l.visible = !!on;

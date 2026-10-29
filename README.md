@@ -18,7 +18,7 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
                     frame by frame)                 nothing added)
 ```
 
-1. **Director** turns your prompt (and an optional reference picture for style) into a build plan: layout, sizes,
+1. **Director** turns your prompt (and up to 5 optional reference pictures) into a build plan: layout, sizes,
    counts, light, cameras. It asks at most three short questions, and only when the idea is unclear.
 2. **Concept picture** shows the plan as one image before anything is built.
 3. **Builder** writes the set as JavaScript against the Scene Kit (`spike/scenekit/kit.js`): objects from primitives,
@@ -27,16 +27,21 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
 4. **You film it**: pick a camera, a move (dolly, crane, arc, orbit, dolly zoom, handheld …), chain moves, set the length
    and the frame format (16:9, 9:16, 1:1). Edit by chat ("make it darker, add a second cage") or by hand.
 5. **Render**: the browser renders the move as a grey *clay* video and a colour frame; an image model makes frame 0
-   photoreal; **LTX-2.5 Layout-To-Render** renders the full shot so it keeps the clay's layout and camera exactly.
+   photoreal (your reference pictures shape how people, things and the place look); **LTX-2.5 Layout-To-Render** renders the full shot so it keeps the clay's layout and camera exactly.
 
 ## Features
 
 - Prompt or reference picture → planned, live-built 3D set; concept picture first (optional).
+- Up to 5 reference pictures (pick or drop them, label what each shows): they guide the plan, the build and the
+  photoreal first frame of every render. A concept picture, a look still or a take's frame can be reused as one.
 - Chat modes: Auto, Ask first (every change to a built set waits for Apply / Cancel), Don't ask, Chat only (answers
   about the set without changing it).
 - 33 camera moves plus your own camera path: scrub the timeline to a moment, frame the view and add a keyframe there
   (the camera passes through it at that time); chained moves, real-time preview, shots from 1 s up to 60 s (longer
   than 15 s renders in overlapping parts that are crossfaded).
+- Camera cuts inside one shot: give a move another camera ("Camera of this move", or "then cut to the close-up for
+  3 s" in chat) and the shot cuts there, like a multi-shot preview. Each camera gets its own photoreal look still,
+  and the cuts stay hard cuts in the final video.
 - The shot from your words: a prompt or chat line such as "8 seconds, slow 360-degree orbit" or "dolly in for 5 s,
   then crane up" sets the shot; "film it" renders it.
 - Frame formats 16:9, 9:16, 1:1, 4:3, 3:4 and 21:9 (2.35:1), all rendered natively by LTX.
@@ -49,7 +54,8 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
 - Hands-on editing in the viewport: select (click or object list; Shift / Ctrl / Cmd-click selects several objects and
   moves, rotates, scales, duplicates or deletes them together as one step), move / rotate / scale gizmo for objects,
   lights and cameras, duplicate, delete, add a person, shapes, point / spot / sun lights and a camera at the current view; Esc
-  returns to orbit. Lights and cameras show as icons in the view; a selected light has colour, brightness and on/off.
+  returns to orbit. Lights and cameras show as icons in the view; a selected light has type (point, spot, sun, area),
+  colour, brightness and on/off; a selected camera can jump to the current view. The Objects list is grouped by kind.
 - Asset library with model packs: a small built-in Samples pack (Poly Haven, CC0); add more yourself — Poly Haven's
   library in one click, a pack from a link (.glb / .zip) or a folder on your computer, or single GLB files. Each pack
   keeps its licence and credit and can be kept out of the builder. Models are placed where you look, at real size; the
@@ -64,6 +70,7 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
   switch it on or off for any shot. The in-between frames come from ComfyUI's built-in frame interpolation (RIFE) when
   your ComfyUI has a model in `models/frame_interpolation` (seconds on a GPU), otherwise from ffmpeg's motion-compensated
   interpolation on the app server (no GPU, about a minute for a 5 s shot).
+- Render shot first shows what will be made (model, size, fps, rough time and file size) to approve, or always allow.
 - Takes with Final / Clay / Side-by-side view; downloads: video, still, GLB with materials and textures. A render
   that stops after its frames were made (e.g. the render server went away) continues from them when you press
   Render shot again.

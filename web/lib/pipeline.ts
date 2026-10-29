@@ -10,6 +10,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { complete, image, type Img } from "./llm";
 import { builderCandidates } from "./library";
+import { lookRefsNote, refList, type Ref } from "./refs";
 import type { Route } from "./models";
 
 const kitFile = (f: string) => readFile(join(process.cwd(), "public", "scenekit", f), "utf8");
@@ -18,6 +19,10 @@ export type Use = { route: Route; model: string };
 // Reference picture rule (moon A/B 10-18: the picture lifted style a lot but pulled the LAYOUT toward itself).
 const REF_NOTE = "REFERENCE PICTURE (attached): take the style, mood, materials and the design of objects from it; take "
   + "positions, sizes and counts from the text. Do not copy the picture's layout.";
+// Several pictures (up to 5, optionally labelled): same rule, plus which picture shows what.
+const refNote = (refs: Ref[]) => refs.length < 2 && !refs[0]?.label ? REF_NOTE
+  : `REFERENCE PICTURES (attached: ${refList(refs, 1)}): take the style, mood, materials and the design of objects, people `
+    + "and places from them; take positions, sizes and counts from the text. Do not copy a picture's layout.";
 
 export type Question = { id: string; question: string; options: string[]; default: string };
 export type DirectorResult =
@@ -48,9 +53,10 @@ const MODE_RULE: Record<AskMode, string> = { auto: "",
   ask: "\nMODE: ASK BEFORE GENERATING — unless answers are given below, return status \"ask\" with 1–3 questions that matter most for this place.\n",
   go: "\nMODE: GENERATE WITHOUT ASKING — never ask; always return status \"ready\" and list your choices as assumptions.\n" };
 
-export async function director(use: Use, prompt: string, answers?: Record<string, string>, refs: Img[] = [], mode: AskMode = "auto"): Promise<DirectorResult> {
+export async function director(use: Use, prompt: string, answers?: Record<string, string>, refs: Ref[] = [], mode: AskMode = "auto"): Promise<DirectorResult> {
   let task = (await kitFile("DIRECTOR_PROMPT.md")) + MODE_RULE[mode] + "\nUSER PROMPT:\n" + prompt.trim() + "\n";
-  if (refs.length) task += "\nThe user attached a reference picture: describe the place in its style, but keep the brief in words.\n";
+  if (refs.length === 1 && !refs[0].label) task += "\nThe user attached a reference picture: describe the place in its style, but keep the brief in words.\n";
+  else if (refs.length) task += `\nThe user attached ${refs.length} reference pictures (${refList(refs, 1)}): describe the place, its people and things in their style and look, but keep the brief in words.\n`;
   if (answers && Object.keys(answers).length)
     task += "\nANSWERS TO YOUR QUESTIONS (final — return status ready):\n" + JSON.stringify(answers) + "\n";
   return parseDirector(await complete(task, { ...use, effort: "high", maxOutputTokens: 8000, images: refs }));
@@ -85,10 +91,10 @@ export const cleanCode = (s: string) =>
   s.replace(/<think>[\s\S]*?<\/think>/g, "").split("\n").filter((l) => !l.trim().startsWith("```")).join("\n").trim() + "\n";
 
 export async function buildBatch(use: Use, a: { prompt: string; brief: string; batches: string[]; index: number; codeSoFar: string;
-  refs?: Img[] }): Promise<string> {
+  refs?: Ref[] }): Promise<string> {
   const k = a.index + 1, n = a.batches.length;
   const task = (await kitFile("BUILDER_PROMPT.md")) + "\n" + a.prompt + "\n\nDIRECTOR'S BUILD BRIEF (follow it closely):\n"
-    + a.brief + "\n" + (a.refs?.length ? `\n${REF_NOTE}\n` : "") + BATCH_RULES
+    + a.brief + "\n" + (a.refs?.length ? `\n${refNote(a.refs)}\n` : "") + BATCH_RULES
     + `\nBATCH ${k}/${n}: ${a.batches[a.index]}\n\nALL BATCHES (for orientation): ${a.batches.join(" | ")}\n`
     + libraryNote(await builderCandidates(a.batches[a.index], a.prompt))
     + (a.codeSoFar.trim() ? "\nCODE ALREADY IN THE SCENE:\n" + a.codeSoFar : "\n(The scene is empty; this is the first batch.)\n");
@@ -106,8 +112,9 @@ const/let/function name (pick new helper names).
 `;
 
 /** Chat edit: returns blocks appended to the scene (same-name rebuild replaces, kit.remove deletes). */
-export async function changeScene(use: Use, a: { prompt: string; brief: string; codeSoFar: string; request: string; refs?: Img[] }): Promise<string> {
+export async function changeScene(use: Use, a: { prompt: string; brief: string; codeSoFar: string; request: string; refs?: Ref[] }): Promise<string> {
   const task = (await kitFile("BUILDER_PROMPT.md")) + "\n" + a.prompt + "\n\nDIRECTOR'S BUILD BRIEF:\n" + a.brief + "\n"
+    + (a.refs?.length ? `\n${refNote(a.refs)}\n` : "")
     + CHANGE_RULES + libraryNote(await builderCandidates(a.request, a.prompt, 12))
     + "\nTHE USER'S CHANGE REQUEST: " + a.request.trim() + "\n\nCODE ALREADY IN THE SCENE:\n" + a.codeSoFar;
   return cleanCode(await complete(task, { ...use, effort: "high", maxOutputTokens: 32_000, images: a.refs }));
@@ -123,6 +130,10 @@ const editRules = (fmt: string) => `Turn this 3D previz render (${fmt}) into THE
 // Long shots: each LTX segment gets a fresh look still; picture 2 = the previous segment's render at the same moment.
 const STYLE_MATCH = " The SECOND picture is this same place already filmed a moment earlier in the same shot: match its "
   + "materials, colours, light and grade exactly, so the cut is invisible. Take layout and framing ONLY from the first picture.";
+// A part that starts on a camera cut: the second picture is the last frame of the previous camera (another angle).
+const CUT_MATCH = " The SECOND picture is the same scene filmed a moment earlier from ANOTHER camera angle: the same people "
+  + "(faces, hair, clothing), objects, materials, colours, light and grade must appear here as they look there. Take layout, "
+  + "framing and who is where ONLY from the first picture; never copy the second picture's composition.";
 
 /** Ask mode: answer a question about the set (or the idea) in plain words, without changing anything. */
 export async function askAbout(use: Use, a: { prompt: string; brief?: string; code?: string; question: string }): Promise<string> {
@@ -138,8 +149,13 @@ export async function askAbout(use: Use, a: { prompt: string; brief?: string; co
 
 /** size = the image model's nearest frame to the clip (1536x1024 | 1024x1536 | 1024x1024); the client crops to the clip.
  *  styleRef = previous segment's rendered frame (long shots), so consecutive segments look the same. */
-export async function lookStill(use: Use, lit: Img, prompt: string, size = "1536x1024", styleRef?: Img, format?: string): Promise<Img> {
+export function lookPrompt(prompt: string, size = "1536x1024", styleRef?: Img, format?: string, refs: Ref[] = [], afterCut = false): string {
   // format = the clip's own frame ("21:9 cinema"); the image model only has 3 sizes, the client crops to the clip.
-  const rules = editRules(format ?? FORMAT[size] ?? "16:9 landscape") + (styleRef ? STYLE_MATCH : "");
-  return image(`${rules} Scene description: ${prompt}`, styleRef ? [lit, styleRef] : [lit], { ...use, quality: "high", size });
+  // Picture order: 1 = lit frame (layout), 2 = previous segment (long shots only), then the user's references.
+  const rules = editRules(format ?? FORMAT[size] ?? "16:9 landscape") + (styleRef ? (afterCut ? CUT_MATCH : STYLE_MATCH) : "") + lookRefsNote(refs, styleRef ? 3 : 2);
+  return `${rules} Scene description: ${prompt}`;
+}
+/** refs = the user's appearance references (people, props, places): they shape the look still, which LTX copies. */
+export async function lookStill(use: Use, lit: Img, prompt: string, size = "1536x1024", styleRef?: Img, format?: string, refs: Ref[] = [], afterCut = false): Promise<Img> {
+  return image(lookPrompt(prompt, size, styleRef, format, refs, afterCut), [lit, ...(styleRef ? [styleRef] : []), ...refs], { ...use, quality: "high", size });
 }

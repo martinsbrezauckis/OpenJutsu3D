@@ -389,23 +389,29 @@ export async function createViewer({ container = document.body, width = 1280, he
    */
   function planShot(camName, move, n, amount, fps = 24) {
     const c0 = kit.cameras.find(c => c.name === camName) || kit.cameras[0];
-    const start = { pos: c0.position.toArray(), lookAt: c0.userData.lookAt, fov: c0.fov, keys: c0.userData.keys };
+    const camState = (c) => ({ pos: c.position.toArray(), lookAt: c.userData.lookAt, fov: c.fov, keys: c.userData.keys });
+    const start = camState(c0);
+    // Cut targets ("move:s@CAM_x"): their poses + keyframes are part of the key as well.
+    const others = [...new Set([...move.matchAll(/@(CAM_[A-Za-z0-9_]+)/g)].map(m => m[1]))].map(nm => kit.cameras.find(c => c.name === nm)).filter(Boolean);
     // The camera's current pose + keyframes are part of the key: a live edit (gizmo, new keyframes) re-plans the shot.
-    const key = `${camName}|${move}|${n}|${amount}|${fps}|${JSON.stringify(start)}`;
+    const key = `${camName}|${move}|${n}|${amount}|${fps}|${JSON.stringify(start)}|${JSON.stringify(others.map(camState))}`;
     if (plans.has(key)) return plans.get(key);
-    // A recipe ("dolly-in:4+arc-left:6:2.5") chains moves continuously; a single move keeps the old behaviour.
-    const raw = move.includes(':') || move.includes('+')
-      ? pathStates(move, start, n, fps)
-      : Array.from({ length: n }, (_, i) => cameraAt(move, start, n > 1 ? i / (n - 1) : 0, { amount, seconds: (n - 1) / fps }));
+    // A recipe ("dolly-in:4+arc-left:6:2.5@CAM_table") chains moves; a segment on another camera is a hard cut to it.
+    const cams = { shot: c0.name, at: (nm) => { const c = others.find(o => o.name === nm); return c ? camState(c) : null; } };
+    const raw = move.includes(':') || move.includes('+') || move.includes('@')
+      ? pathStates(move, start, n, fps, 0.6, cams)
+      : Array.from({ length: n }, (_, i) => ({ ...cameraAt(move, start, n > 1 ? i / (n - 1) : 0, { amount, seconds: (n - 1) / fps }), cam: c0.name, seg: 0, group: 0, cut: false, from: start.pos }));
     // Wall avoidance is an INTERIOR concept: outdoors the look-at target is often inside a building (a cathedral), so a
     // target→camera ray would drag the camera into it (city flyover, 10-18). Exteriors fly free, ≥ 1.5 m above floor.
     // a frame whose camera has not left the start pose (pans, tilts, zooms: only the look-at moves) keeps it — the
-    // look-at point swinging into a wall must not drag the camera after it (tavern whip-pan jumped, 10-29)
-    const still = (st) => Math.hypot(...st.pos.map((x, k) => x - start.pos[k])) < 1e-3;
+    // look-at point swinging into a wall must not drag the camera after it (tavern whip-pan jumped, 10-29). With cuts,
+    // "start pose" = the start of that camera's run (st.from), and the smoothing windows stop at a cut.
+    const still = (st) => Math.hypot(...st.pos.map((x, k) => x - st.from[k])) < 1e-3;
     const f = skyInfo.exterior ? raw.map(() => 1) : raw.map((st) => (still(st) ? 1 : freeFraction(st))), win = Math.max(1, Math.round(n / 12));
     if (skyInfo.exterior) for (const st of raw) st.pos[1] = Math.max(st.pos[1], box.min.y + 1.5);
-    const mins = f.map((_, i) => Math.min(...f.slice(Math.max(0, i - win), i + win + 1)));
-    const smooth = mins.map((_, i) => { const s = mins.slice(Math.max(0, i - win), i + win + 1); return s.reduce((a, b) => a + b, 0) / s.length; });
+    const near = (arr, i) => arr.slice(Math.max(0, i - win), i + win + 1).filter((_, j) => raw[Math.max(0, i - win) + j].group === raw[i].group);
+    const mins = f.map((_, i) => Math.min(...near(f, i)));
+    const smooth = mins.map((_, i) => { const s = near(mins, i); return s.reduce((a, b) => a + b, 0) / s.length; });
     const plan = raw.map((st, i) => {
       const r = Math.min(1, smooth[i]);
       if (r < 0.999) st.pos = st.lookAt.map((t, k) => t + (st.pos[k] - t) * r);
@@ -767,8 +773,9 @@ export async function createViewer({ container = document.body, width = 1280, he
   }
 
   const dirty = (f) => (...a) => { const r = f(...a); needsRender = true; if (r && typeof r.then === 'function') r.finally(() => { needsRender = true; }); return r; };
-  /** The planned camera states of a whole shot (read-only; the app measures the move's speed for 48 fps). */
-  const path = (camName, move, n, fps = 24) => planShot(camName, move, n, 1, fps).map(({ pos, lookAt, fov, roll }) => ({ pos, lookAt, fov, roll }));
+  /** The planned camera states of a whole shot (read-only; the app measures the move's speed for 48 fps; cam/cut = which
+   *  scene camera films each frame and where a cut to another camera lands). */
+  const path = (camName, move, n, fps = 24) => planShot(camName, move, n, 1, fps).map(({ pos, lookAt, fov, roll, cam, seg, cut }) => ({ pos, lookAt, fov, roll, cam, seg, cut }));
   return { load: dirty(load), setMode: dirty(setMode), shot, frame, seek, path, setView, renderView: () => renderWith(overview), visible, exportGLB, setSize: dirty(setSize), texturesSettled, interactive, frameView: dirty(frameView),
     blackness, select: dirty(select), selectMany: dirty(selectMany), editGroup: dirty(editGroup), locate, gizmoHandle, setGizmo: dirty(setGizmo), exec: dirty(exec), objects, viewState, addModel: dirty(addModel), hasModel: (id) => models.has(id), on: (ev, f) => { listeners[ev] = f; },
     MOVES, get canvas() { return renderer.domElement; }, renderer, get result() { return result; },

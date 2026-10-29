@@ -23,6 +23,7 @@ const ADD: { id: string; label: string }[] = [{ id: "library", label: "Model fro
   { id: "point", label: "Point light" }, { id: "spot", label: "Spot light" }, { id: "sun", label: "Sun" }, { id: "camera", label: "Camera from this view" },
 ];
 const r2 = (v: number) => Math.round(v * 100) / 100;
+const GROUPS: [string, string][] = [["CHAR", "People"], ["ENV", "Set"], ["PRP", "Props"], ["MACH", "Machines"], ["LGT", "Lights"], ["CAM", "Cameras"], ["", "Other"]];
 const v3 = (a: number[]) => `[${a.map(r2).join(", ")}]`;
 export type SceneProps = { exposure: number; lights: number; background: string | null };
 const DEFAULT_PROPS: SceneProps = { exposure: 1, lights: 1, background: null };
@@ -44,7 +45,7 @@ export const editLine = (e: ObjEdit) => `kit.edit('${e.name}', { pos: ${v3(e.pos
 export const groupBlock = (lines: string[]) => lines.join("\n//@@\n");
 const groupKey = (names: string[]) => `edit:${names.join(",")}`;
 
-export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boolean; record: RecordEdit; onError: (msg: string) => void; reloads: number; code: string }) {
+export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boolean; record: RecordEdit; onError: (msg: string) => void; reloads: number; code: string; onEscape?: () => void }) {
   const [mode, setModeState] = useState<GizmoMode>(null);
   const [sel, setSel] = useState<ObjInfo | null>(null);
   const [list, setList] = useState<{ name: string; category: string }[] | null>(null);   // null = panel closed
@@ -125,11 +126,19 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
   // ---------- light panel ----------
   const lightBase = useRef(new Map<string, number>());   // brightness slider spans 0–200 % of the light as first selected
   const lightMax = (s: ObjInfo) => { if (!lightBase.current.has(s.name)) lightBase.current.set(s.name, Math.max(0.5, s.light?.intensity ?? 1)); return lightBase.current.get(s.name)! * 2; };
-  async function setLight(p: { color?: string; intensity?: number; on?: boolean }) {
+  async function setLight(p: { type?: string; color?: string; intensity?: number; on?: boolean }) {
     if (!sel?.light) return;
     const next = { ...sel.light, ...p }; setSel({ ...sel, light: next });
     const r2x = (x: number) => Math.round(x * 1000) / 1000;
-    await run(`kit.lightProps('${sel.name}', { color: '${next.color}', intensity: ${r2x(next.intensity)}, on: ${next.on} });`, `Light ${sel.name}`, `light:${sel.name}`);
+    await run(`kit.lightProps('${sel.name}', { type: '${next.type}', color: '${next.color}', intensity: ${r2x(next.intensity)}, on: ${next.on} });`, `Light ${sel.name}`, `light:${sel.name}`);
+    if (p.type) await select(sel.name);   // a new kind of light is a new object: the gizmo and panel follow it
+  }
+  /** A selected camera jumps to the current view (its path keys stay). */
+  async function cameraToView() {
+    if (!bridge || !sel || !/^CAM_/.test(sel.name)) return;
+    const v = await bridge.viewState();
+    await run(`kit.cameraView('${sel.name}', { pos: ${v3(v.pos)}, lookAt: ${v3(v.target)}, fov: ${r2(v.fov)} });`, `${sel.name}: set to view`, `camview:${sel.name}`);
+    await select(sel.name);   // the gizmo and the panel follow the camera to its new place
   }
   async function run(block: string, note: string, coalesce?: string) {
     if (!bridge) return false;
@@ -174,7 +183,7 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
   const selectMany = async (names: string[]) => setSel((await bridge?.selectMany(names)) ?? null);
   /** Esc: drop the selection and go back to Orbit (Higgsfield: Esc leaves the current tool / camera). */
   const escapeRef = useRef(async () => {});
-  escapeRef.current = async () => { await select(null); await setMode(null); setList(null); };
+  escapeRef.current = async () => { optsRef.current.onEscape?.(); await select(null); await setMode(null); setList(null); };
   const escape = () => { void escapeRef.current(); };
   const unique = (base: string, taken: Set<string>) => { let i = 1; while (taken.has(`${base}_${i}`)) i++; return `${base}_${i}`; };
   async function taken() { const o = (await bridge?.objects()) ?? []; return new Set(o.map((x) => x.name)); }
@@ -245,6 +254,7 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
         {sel && <span className="sel-chip"><b>{sel.names ? `${sel.names.length} objects` : sel.name}</b>
           {/* Lights and cameras move and turn with the handles; only objects can be duplicated. */}
           {!/^(LGT|CAM)_/.test(sel.name) && <button className="pill" onClick={duplicate}>Duplicate</button>}
+          {/^CAM_/.test(sel.name) && !sel.names && <button className="pill" onClick={cameraToView} title="Move this camera to what you see now">Set to view</button>}
           <button className="pill" onClick={remove}>Delete</button>
           <button className="pill" aria-label="Clear selection" onClick={() => select(null)}>×</button></span>}
       </div>
@@ -255,7 +265,8 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
           <input type="range" aria-label="Light brightness" min={0} max={lightMax(sel)} step={lightMax(sel) / 100} value={sel.light.intensity}
             onChange={(e) => setLight({ intensity: Number(e.target.value) })} /></label>
         <button className={`pill ${sel.light.on ? "on" : ""}`} aria-pressed={sel.light.on} onClick={() => setLight({ on: !sel.light!.on })}>{sel.light.on ? "On" : "Off"}</button>
-        <span className="note">{sel.light.type} light</span>
+        <label>Type <select aria-label="Light type" value={sel.light.type} onChange={(e) => setLight({ type: e.target.value })}>
+          {[["point", "Point"], ["spot", "Spot"], ["directional", "Sun"], ["area", "Area"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
       </div>}
       {scenePanel && <div className="scene-panel" role="group" aria-label="Scene properties">
         <label>Exposure <span>{props.exposure.toFixed(2)}×</span>
@@ -293,14 +304,17 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
         {lib.credit && <p className="note credit">{lib.credit}</p>}
       </div>}
       {list && <div className="obj-list" role="listbox" aria-multiselectable aria-label="Objects in the set">
-        {list.map((o) => <button key={o.name} role="option" aria-selected={sel?.names ? sel.names.includes(o.name) : sel?.name === o.name}
-          onClick={(e) => select(o.name, e.shiftKey || e.ctrlKey || e.metaKey)}>
-          {o.category === "LGT" ? "Light: " : o.category === "CAM" ? "Camera: " : ""}{o.name}</button>)}
+        {/* grouped by kind like an outliner; each group folds */}
+        {GROUPS.map(([cat, title]) => { const items = list.filter((o) => (GROUPS.some(([c]) => c === o.category) ? o.category : "") === cat); return items.length > 0 && (
+          <details key={cat || "other"} open role="group" aria-label={title}><summary>{title} <span>{items.length}</span></summary>
+            {items.map((o) => <button key={o.name} role="option" title={o.name} aria-selected={sel?.names ? sel.names.includes(o.name) : sel?.name === o.name}
+              onClick={(e) => select(o.name, e.shiftKey || e.ctrlKey || e.metaKey)}>{o.name.replace(/^[A-Z]+_/, "").replace(/_/g, " ")}</button>)}
+          </details>); })}
       </div>}
     </>
   );
   return { ui, mode, sel, props, lib: lib && { q: lib.q, n: lib.items.length, first: lib.items[0]?.name ?? null, on: lib.on },
-    acts: { setMode, select, selectMany, duplicate, remove, add, toggleList, editSelected, changeProps, searchLib, openPacks: async () => { await searchLib(""); await openPacks(); },
+    acts: { setMode, select, selectMany, duplicate, remove, add, toggleList, cameraToView, editSelected, changeProps, searchLib, openPacks: async () => { await searchLib(""); await openPacks(); },
     placeResult: async (i = 0) => { const it = lib?.items[i]; if (!it) throw new Error("no library result"); await placeModel(it); },
     scenePanel: (on: boolean) => setScenePanel(on), setLight: (p: { color?: string; intensity?: number; on?: boolean }) => setLight(p) } };
 }

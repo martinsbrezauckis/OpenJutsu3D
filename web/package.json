@@ -9,7 +9,7 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
-    "test": "tsc --noEmit && node ../bench/cost_mock_test.mjs && node ../bench/openai_route_mock_test.mts && node ../bench/segments_test.mts && node ../bench/zip_guard_test.mts && node ../bench/ip_policy_test.mts && node ../bench/scene_code_test.mts && node ../bench/shot_intent_test.mts && node ../bench/fps48_test.mts"
+    "test": "tsc --noEmit && node ../bench/cost_mock_test.mjs && node ../bench/openai_route_mock_test.mts && node ../bench/segments_test.mts && node ../bench/zip_guard_test.mts && node ../bench/ip_policy_test.mts && node ../bench/scene_code_test.mts && node ../bench/shot_intent_test.mts && node ../bench/fps48_test.mts && node ../bench/refs_test.mts && node ../bench/cuts_test.mts"
   },
   "engines": {
     "node": ">=22.6.0"

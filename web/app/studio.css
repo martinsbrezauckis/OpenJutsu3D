@@ -57,6 +57,15 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .pill select { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .pill.on { border-color: var(--yellow); color: var(--yellow); }
 .pill .x { margin-left: 2px; opacity: .7; }
+.approve { position: absolute; right: 12px; bottom: calc(100% + 8px); z-index: 20; width: 360px; padding: 12px 14px; border-radius: 12px;
+  background: rgb(27 21 32 / 97%); border: 1px solid var(--line); font-size: 13px; box-shadow: 0 8px 30px rgb(0 0 0 / 45%); }
+.approve dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 8px 0 10px; }
+.approve dt { color: var(--muted, #9a90a6); }
+.approve dd { margin: 0; }
+.approve .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.count { font-size: 12px; color: var(--muted, #9a90a6); align-self: center; }
+.count.over { color: #ff7a7a; }
+.question .own { margin-top: 6px; width: 100%; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: inherit; font: inherit; font-size: 13px; }
 .light-panel { position: absolute; left: 12px; top: 56px; z-index: 6; display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 12px;
   background: rgb(27 21 32 / 92%); border: 1px solid var(--line); font-size: 13px; }
 .light-panel label { display: flex; align-items: center; gap: 6px; }
@@ -102,6 +111,9 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .msg { max-width: 94%; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; }
 .msg.user { align-self: flex-end; background: var(--yellow); color: var(--ink); }
 .msg.user img { display: block; width: 120px; border-radius: 8px; margin-top: 6px; }
+.msg.user .refrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.msg.user .refrow img { width: 56px; height: 40px; object-fit: cover; margin: 0; }
+.ghost.small { padding: 2px 8px; font-size: 12px; margin-top: 6px; }
 .msg.bot { align-self: stretch; max-width: none; background: var(--bubble); display: grid; gap: 8px; }
 .msg.bot ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 2px; }
 .msg.error { background: rgb(255 154 154 / 10%); color: #ffc2c2; }
@@ -146,7 +158,7 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .seg button { padding: 5px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; }
 .seg button[aria-pressed="true"] { background: var(--yellow); color: var(--ink); }
 
-.shotbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.shotbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; position: relative; }
 .cams { display: flex; gap: 8px; }
 .cam { position: relative; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--field); overflow: hidden; }
 .cam img, .cam .ph { display: block; width: 96px; height: 54px; object-fit: cover; }
@@ -163,6 +175,8 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .track .seg-move { position: absolute; top: 4px; height: 22px; border-radius: 6px; background: rgb(242 255 89 / 16%); border: 1px solid rgb(242 255 89 / 40%); color: var(--text);
   font-size: 12px; padding: 2px 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
 .track .seg-move[aria-pressed="true"] { background: rgb(242 255 89 / 30%); border-color: var(--yellow); }
+.track .seg-move.cut { box-shadow: -4px 0 0 -1px #ff5c7a; }   /* a hard cut to another camera starts this move */
+.track .seg-move .seg-cam { font-style: normal; color: var(--muted); }
 .track .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff5c7a; border-radius: 1px; pointer-events: none; }
 .timeline .time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 72px; text-align: right; }
 
@@ -170,6 +184,8 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .take { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; padding: 4px 10px 4px 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 12px; color: var(--muted); }
 .take img { width: 64px; height: 36px; object-fit: cover; border-radius: 6px; }
 .take b { color: var(--text); font-weight: 600; }
+.take-refs { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; margin-left: auto; font-size: 12px; color: var(--muted); }
+.take-refs .ghost { padding: 4px 10px; font-size: 12px; }
 .take[aria-current="true"] { border-color: var(--yellow); }
 
 .status { margin: 0; color: var(--muted); font-size: 14px; }
@@ -201,6 +217,9 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
   padding: 6px 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .obj-list button:hover { background: var(--panel); }
 .obj-list button[aria-selected="true"] { background: var(--yellow); color: var(--ink); }
+.obj-list summary { cursor: pointer; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted, #9a90a6); padding: 6px 8px 2px; }
+.obj-list summary span { opacity: .7; }
+.obj-list details { display: grid; }
 .scene-panel { position: absolute; top: 56px; left: 12px; width: 280px; display: grid; gap: 12px; padding: 14px; border-radius: 10px;
   background: rgb(27 21 32 / .92); border: 1px solid var(--line); font-size: 13px; }
 .scene-panel label { display: grid; gap: 6px; grid-template-columns: 1fr auto; align-items: center; }

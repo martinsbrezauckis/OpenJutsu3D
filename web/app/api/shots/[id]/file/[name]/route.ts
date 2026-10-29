@@ -10,7 +10,8 @@ export async function GET(_: Request, ctx: { params: Promise<{ id: string; name:
   try {
     const { id, name } = await ctx.params;
     // Long-shot segment files: one digit, fixed shapes only.
-    const type = TYPES[name] ?? (/^(render|clay)_s\d\.mp4$/.test(name) ? "video/mp4" : /^look_raw_s\d\.png$/.test(name) ? "image/png" : undefined);
+    const type = TYPES[name] ?? (/^(render|clay)_s\d\.mp4$/.test(name) ? "video/mp4" : /^look_raw_s\d\.png$/.test(name) ? "image/png"
+      : /^look_raw(_s\d)?\.json$/.test(name) ? "application/json" : undefined);
     if (!type) return fail(new Error("not found"), 404);
     return new Response(await readFile(join(shotDir(id), name)), { headers: { "content-type": type, "cache-control": "no-store" } });
   } catch (e) { return fail(e, 404); }
