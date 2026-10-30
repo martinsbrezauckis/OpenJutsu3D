@@ -24,7 +24,7 @@
     "bench/e2e_ui.py",
     "bench/e2e_edit.py",
     "bench/e2e_multiselect.py",
-    "bench/e2e_cuts.py",
+    "bench/e2e_cuts.py", "bench/e2e_walls.py",
     "bench/e2e_p7.py",
     "bench/e2e_library.py",
     "bench/e2e_newscene.py",
