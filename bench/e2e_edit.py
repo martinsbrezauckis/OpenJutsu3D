@@ -58,7 +58,7 @@ def main():
     check("new camera is named CAM_view_<n> (numbered)", re.fullmatch(r"CAM_view_\d{1,3}", cam))
     s9 = act("camera", [cam], wait=3)
     import time
-    for _ in range(15):   # thumbnails render one by one after a reload (CPU WebGL on WSL: seconds)
+    for _ in range(15):   # thumbnails render one by one after a reload (software WebGL: seconds)
         if cam in ((call("/state").get("state") or {}).get("thumbs") or []): break
         time.sleep(2)
     check("new camera gets a thumbnail after undo/redo", cam in ((call("/state").get("state") or {}).get("thumbs") or []))
