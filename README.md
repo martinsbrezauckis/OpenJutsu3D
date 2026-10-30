@@ -128,7 +128,13 @@ npm run dev                                         # http://127.0.0.1:3000
 - `COMFY_BASE_URL` — where the LTX workflow runs: a Comfy deployment URL, or a local ComfyUI behind
   [`comfy-api-proxy`](https://github.com/Comfy-Org/comfy-api-proxy) (e.g. `http://127.0.0.1:8189`). The local ComfyUI
   needs the LTX-2.5 22B distilled model, its spatial upscaler and the Layout-To-Render IC-LoRA (about 85 GB of VRAM at
-  1920×1088 in bf16).
+  1920×1088 in bf16). Only core ComfyUI nodes are used (no custom nodes; tested on ComfyUI of 2026-10-15). Files, as
+  named in `web/workflows/l2r.api.json`, under `ComfyUI/models/`:
+  `diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors`,
+  `text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors`,
+  `vae/ltx-2.5-video-vae-bf16.safetensors`, `vae/ltx-2.5-audio-vae-bf16.safetensors`,
+  `latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors`,
+  `loras/ltx-2.5-22b-ic-lora-layout-to-render-1.0.safetensors`.
 - Optional: `LLM_PROVIDER=codex` with `CODEX_HOME` to use a Codex subscription; `OPENAI_API_KEY` for the OpenAI route.
 - Model packs are added in the app (Add › Model from the library › Packs). For a large local collection, e.g.
   [Scenario's 3D Collection](https://huggingface.co/datasets/scenario-labs/3d-collection) (CC BY 4.0, ~37 GB), add its
