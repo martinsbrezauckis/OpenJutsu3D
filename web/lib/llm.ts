@@ -7,6 +7,7 @@
  *                      codex blocks on an open stdin). No Router credits used. Image edits use Codex's $imagegen.
  *   claude / agy     — Claude Code (`claude -p`, prompt on stdin, no tools except Read for attached pictures) and
  *                      Antigravity (`agy --print`, sandboxed) on the user's own subscriptions: text only.
+ *   local            — your own OpenAI-compatible server (Ollama, vLLM, LM Studio, llama.cpp): streamed chat completions.
  *   anthropic        — Anthropic Messages API with the user's ANTHROPIC_API_KEY (streamed; text only).
  *   google           — Gemini API with the user's GEMINI_API_KEY: text streamed, images from an image model's inline data.
  *   openai           — OpenAI API with the user's own OPENAI_API_KEY (OPENAI_BASE_URL overrides the endpoint).
@@ -20,7 +21,7 @@ import { mkdtemp, readFile, writeFile, readdir, rm, stat } from "node:fs/promise
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ANTHROPIC_KEY, ANTHROPIC_URL, GEMINI_KEY, GEMINI_URL, type Route } from "./models";
+import { ANTHROPIC_KEY, ANTHROPIC_URL, GEMINI_KEY, GEMINI_URL, LOCAL_URL, type Route } from "./models";
 import { reportOpenAI, reportRouter } from "./cost";
 
 /** Pull the text out of an OpenAI Responses-API document (Router forwards the provider's JSON unchanged). */
@@ -97,6 +98,7 @@ export async function complete(prompt: string, opts: { route: Route; model: stri
   }
   if (opts.route === "openai") return openaiText(prompt, opts);
   if (opts.route === "anthropic") return anthropicText(prompt, opts);
+  if (opts.route === "local") return localText(prompt, opts);
   if (opts.route === "google") return geminiText(prompt, opts);
   const input = opts.images?.length
     ? [{ role: "user", content: [{ type: "input_text", text: prompt }, ...opts.images.map((i) => ({ type: "input_image", image_url: dataUrl(i) }))] }]
@@ -129,6 +131,15 @@ async function anthropicText(prompt: string, opts: { model: string; maxOutputTok
   let out = ""; await sse(r, (d) => { if (d.type === "content_block_delta" && d.delta?.type === "text_delta") out += d.delta.text;
     if (d.type === "error") throw new Error(`anthropic: ${d.error?.message ?? "error"}`); });
   return out;
+}
+// Reasoning models stream their thinking separately (reasoning_content) or inside <think>…</think>: keep only the answer.
+async function localText(prompt: string, opts: { model: string; maxOutputTokens?: number; images?: Img[]; signal?: AbortSignal }) {
+  const content = opts.images?.length ? [{ type: "text", text: prompt }, ...opts.images.map((i) => ({ type: "image_url", image_url: { url: dataUrl(i) } }))] : prompt;
+  const r = await fetch(`${LOCAL_URL()}/chat/completions`, { method: "POST", signal: opts.signal,
+    headers: { "content-type": "application/json", ...(process.env.LOCAL_LLM_API_KEY ? { authorization: `Bearer ${process.env.LOCAL_LLM_API_KEY}` } : {}) },
+    body: JSON.stringify({ model: opts.model, stream: true, messages: [{ role: "user", content }], ...(opts.maxOutputTokens ? { max_tokens: opts.maxOutputTokens } : {}) }) });
+  let out = ""; await sse(r, (d) => { const c = d.choices?.[0]?.delta?.content; if (typeof c === "string") out += c; });
+  return out.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 }
 const geminiParts = (prompt: string, images: Img[] = []) => [{ text: prompt }, ...images.map((i) => ({ inline_data: { mime_type: i.type, data: b64(i) } }))];
 async function geminiText(prompt: string, opts: { model: string; maxOutputTokens?: number; images?: Img[]; signal?: AbortSignal }) {

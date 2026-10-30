@@ -7,6 +7,8 @@
  *           through its generate_image tool (Nano Banana).
  *   A subscription CLI is offered only when it is installed and logged in — with its own login, which the app never
  *   touches; otherwise the picker shows it as not available. Text-only routes take the look still from another route.
+ *   local      your own model server (LOCAL_LLM_BASE_URL: Ollama, vLLM, LM Studio, llama.cpp — any OpenAI-compatible
+ *              /v1/chat/completions): open-weights models on your machine, text only.
  *   anthropic  Anthropic API with the user's own key (ANTHROPIC_API_KEY): Claude models, text only.
  *   google     Google Gemini API with the user's own key (GEMINI_API_KEY or GOOGLE_API_KEY): text + image models.
  *   openai  OpenAI API directly with the user's own key (OPENAI_API_KEY): for models Router does not carry yet
@@ -20,13 +22,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { comfy } from "@comfyorg/sdk";
 
-export type Route = "router" | "codex" | "openai" | "claude" | "agy" | "anthropic" | "google";
+export type Route = "router" | "codex" | "openai" | "claude" | "agy" | "anthropic" | "google" | "local";
+export const LOCAL_URL = () => process.env.LOCAL_LLM_BASE_URL?.trim().replace(/\/$/, "");
 export const ANTHROPIC_KEY = () => process.env.ANTHROPIC_API_KEY?.trim();
 export const GEMINI_KEY = () => (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)?.trim();
 export const ANTHROPIC_URL = () => (process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/$/, "");
 export const GEMINI_URL = () => (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
 /** Routes that run on the user's own CLI subscription: no per-call cost, nothing to meter. */
-export const SUBSCRIPTION: Route[] = ["codex", "claude", "agy"];
+export const SUBSCRIPTION: Route[] = ["codex", "claude", "agy", "local"];
 export type Stage = "director" | "builder" | "look";
 export type ModelOption = { id: string; label: string; note?: string };
 
@@ -61,11 +64,16 @@ function agyModels(out: string) {
     .map(([id, name]) => ({ id: id.trim(), label: name.trim(), note: "subscription" }));
   return { text: order(text), image: [{ id: "nano-banana", label: "Nano Banana (Antigravity)", note: "subscription" }] };
 }
-let remoteAt = 0;
-/** Refresh the Router catalog and the OpenAI model list (at most every 10 minutes; failures keep the last list). */
-export async function refreshModels(): Promise<void> {
-  if (Date.now() - remoteAt < 600_000) return;
-  remoteAt = Date.now();
+let remoteAt = 0, refreshing: Promise<void> | null = null;
+/** Refresh the remote model lists (at most every 10 minutes; failures keep the last list). Callers that arrive while a
+ *  refresh runs wait for that same refresh instead of reading half-empty lists. */
+export function refreshModels(): Promise<void> {
+  if (refreshing) return refreshing;
+  if (Date.now() - remoteAt < 600_000) return Promise.resolve();
+  refreshing = refreshRemote().finally(() => { remoteAt = Date.now(); refreshing = null; });
+  return refreshing;
+}
+async function refreshRemote(): Promise<void> {
   if (process.env.COMFY_API_KEY?.trim()) {
     try { const ids: string[] = []; for await (const m of comfy.models.list()) ids.push(m.id);
       listed.router = { text: order(ids.filter(routerText).map((i) => opt(i))), image: order(ids.filter((i) => /^openai\/gpt-image/.test(i)).map((i) => opt(i))) };
@@ -77,6 +85,13 @@ export async function refreshModels(): Promise<void> {
       const ids: string[] = ((await r.json())?.data ?? []).map((m: any) => String(m.id));
       listed.openai = { text: order(ids.filter((i) => routerText(`openai/${i}`)).map((i) => opt(i))), image: order(ids.filter((i) => /^gpt-image/.test(i)).map((i) => opt(i))) };
     } catch { /* keep what we had */ }
+  }
+  const lu = LOCAL_URL();
+  if (lu) {
+    try { const r = await fetch(`${lu}/models`, { headers: process.env.LOCAL_LLM_API_KEY ? { authorization: `Bearer ${process.env.LOCAL_LLM_API_KEY}` } : {}, signal: AbortSignal.timeout(10_000) });
+      const ids: string[] = ((await r.json())?.data ?? []).map((m: any) => String(m.id)).filter((i: string) => !/embed/i.test(i));
+      listed.local = { text: ids.map((i) => ({ id: i, label: i, note: "your server" })), image: [] };
+    } catch { listed.local = { text: [], image: [] }; }
   }
   const ak = ANTHROPIC_KEY();
   if (ak) {
@@ -124,6 +139,7 @@ export function unavailable(): Partial<Record<Route, string>> {
   if (!process.env.COMFY_API_KEY?.trim()) u.router = "no COMFY_API_KEY";
   if (!process.env.OPENAI_API_KEY?.trim()) u.openai = "no OPENAI_API_KEY";
   if (!ANTHROPIC_KEY()) u.anthropic = "no ANTHROPIC_API_KEY";
+  if (!LOCAL_URL()) u.local = "no LOCAL_LLM_BASE_URL"; else if (!listed.local?.text.length) u.local = "server not answering or no models";
   if (!GEMINI_KEY()) u.google = "no GEMINI_API_KEY";
   for (const c of ["codex", "claude", "agy"] as const) { const s = cliState(c); if (s !== "ok") u[c] = s; }
   return u;
@@ -135,6 +151,7 @@ export function routes(): Route[] {
   if (process.env.OPENAI_API_KEY?.trim() && listed.openai?.text.length) r.push("openai");
   if (cliState("claude") === "ok") r.push("claude");
   if (cliState("agy") === "ok") r.push("agy");
+  if (LOCAL_URL() && listed.local?.text.length) r.push("local");
   if (ANTHROPIC_KEY() && listed.anthropic?.text.length) r.push("anthropic");
   if (GEMINI_KEY() && listed.google?.text.length) r.push("google");
   return r;

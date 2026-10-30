@@ -18,13 +18,17 @@ const srv = http.createServer(async (req, res) => {
   if (req.url === "/g/v1beta/models/gemini-4-argon:streamGenerateContent?alt=sse") return stream([
     { candidates: [{ content: { parts: [{ text: "thinking…", thought: true }, { text: "kit.object('ENV_" }] } }] },
     { candidates: [{ content: { parts: [{ text: "g').commit();" }] } }] }]);
+  if (req.url === "/l/v1/models") return send({ data: [{ id: "qwen3.8-flash-next" }, { id: "nomic-embed-text" }] });
+  if (req.url === "/l/v1/chat/completions") return stream([{ choices: [{ delta: { content: "<think>plan</think>kit.object('ENV_" } }] },
+    { choices: [{ delta: { reasoning_content: "hidden" } }] }, { choices: [{ delta: { content: "l').commit();" } }] }]);
   if (req.url === "/g/v1beta/models/gemini-3.1-flash-image:generateContent") return send({ candidates: [{ content: { parts: [{ text: "here" },
     { inlineData: { mimeType: "image/png", data: Buffer.from("PNGDATA").toString("base64") } }] } }] });
   send({ error: { message: "nope" } }, 404);
 });
 await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
 const base = `http://127.0.0.1:${(srv.address() as any).port}`;
-Object.assign(process.env, { ANTHROPIC_BASE_URL: `${base}/a`, ANTHROPIC_API_KEY: "a-key", GEMINI_BASE_URL: `${base}/g`, GEMINI_API_KEY: "g-key" });
+Object.assign(process.env, { ANTHROPIC_BASE_URL: `${base}/a`, ANTHROPIC_API_KEY: "a-key", GEMINI_BASE_URL: `${base}/g`, GEMINI_API_KEY: "g-key",
+  LOCAL_LLM_BASE_URL: `${base}/l/v1`, LOCAL_LLM_API_KEY: "l-key" });
 delete process.env.COMFY_API_KEY; delete process.env.OPENAI_API_KEY;
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -38,10 +42,11 @@ const { refreshModels, options, routes } = await import(join(scratch, "models.ts
 await refreshModels();
 const a = await complete("build", { route: "anthropic", model: "claude-opus-5-5", images: [{ bytes: new Uint8Array([1, 2]), type: "image/png" }] });
 const g = await complete("build", { route: "google", model: "gemini-4-argon" });
+const loc = await complete("build", { route: "local", model: "qwen3.8-flash-next" });
 const img = await image("a look", [{ bytes: new Uint8Array([9, 9]), type: "image/jpeg" }], { route: "google", model: "gemini-3.1-flash-image", size: "1536x1024" });
 const msg = seen.find((s) => s.u === "/a/v1/messages"), gimg = seen.find((s) => s.u?.includes(":generateContent"));
 const checks = {
-  routes: routes().includes("anthropic") && routes().includes("google"),
+  routes: routes().includes("anthropic") && routes().includes("google") && routes().includes("local"),
   anthropic_models: options("builder", "anthropic").map((o: any) => o.id).join() === "claude-sonnet-5-5,claude-opus-5-5" || options("builder", "anthropic").length === 2,
   google_text_models: options("builder", "google").map((o: any) => o.id).join() === "gemini-4-argon",
   google_image_models: options("look", "google").map((o: any) => o.id).join() === "gemini-3.1-flash-image",
@@ -50,6 +55,9 @@ const checks = {
   google_text_skips_thoughts: g === "kit.object('ENV_g').commit();",
   google_image: Buffer.from(img.bytes).toString() === "PNGDATA" && img.type === "image/png",
   google_key_and_aspect: gimg?.h["x-goog-api-key"] === "g-key" && gimg?.json?.generationConfig?.imageConfig?.aspectRatio === "3:2",
+  local_models_no_embeddings: options("builder", "local").map((o: any) => o.id).join() === "qwen3.8-flash-next",
+  local_text_without_thinking: loc === "kit.object('ENV_l').commit();",
+  local_key: seen.find((x) => x.u === "/l/v1/chat/completions")?.h.authorization === "Bearer l-key",
   google_ref_part: !!gimg?.json?.contents?.[0]?.parts?.[1]?.inline_data,
 };
 console.log(JSON.stringify(checks)); srv.close(); process.exit(Object.values(checks).every(Boolean) ? 0 : 1);

@@ -60,9 +60,9 @@ const CHAT_MODES = { auto: "Auto", ask: "Ask first", go: "Don't ask", chat: "Cha
 const CHAT_MODE_HELP: Record<keyof typeof CHAT_MODES, string> = { auto: "Auto: ask only when the idea is unclear",
   ask: "Ask first: questions before building, and every change waits for your OK", go: "Don't ask: decide and build", chat: "Chat only: answers, no changes" };
 const ROUTE_LABEL: Record<string, string> = { router: "Comfy Router (credits)", codex: "Codex CLI (your subscription)", openai: "OpenAI API (your key)",
-  claude: "Claude Code (your subscription)", agy: "Antigravity CLI (your subscription)", anthropic: "Anthropic API (your key)", google: "Google Gemini API (your key)" };
+  claude: "Claude Code (your subscription)", agy: "Antigravity CLI (your subscription)", anthropic: "Anthropic API (your key)", google: "Google Gemini API (your key)", local: "Open model server (your URL)" };
 const SUBSCRIPTION = ["codex", "claude", "agy"];
-const ROUTE_NOTE: Record<string, string> = { router: "Model calls are charged to your Comfy credits.", codex: "Runs on your Codex subscription.", claude: "Runs on your Claude subscription.", agy: "Runs on your Antigravity subscription.", anthropic: "Model calls are charged to your Anthropic API key.", google: "Model calls are charged to your Google API key.",
+const ROUTE_NOTE: Record<string, string> = { router: "Model calls are charged to your Comfy credits.", codex: "Runs on your Codex subscription.", claude: "Runs on your Claude subscription.", agy: "Runs on your Antigravity subscription.", anthropic: "Model calls are charged to your Anthropic API key.", google: "Model calls are charged to your Google API key.", local: "Runs on your own model server.",
   openai: "Model calls are charged to your OpenAI API key." };
 // `video`: the example ships with a finished render of the set (shown on its card), made in this app.
 const EXAMPLES: { id: string; title: string; prompt: string; video?: boolean }[] = [

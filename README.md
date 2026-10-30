@@ -101,6 +101,7 @@ with no image model hands the look still to one that has):
 | OpenAI API | `OPENAI_API_KEY`; the models your key lists | OpenAI per token |
 | Anthropic API | `ANTHROPIC_API_KEY`; the Claude models your key lists (text only) | Anthropic per token |
 | Google Gemini API | `GEMINI_API_KEY`; Gemini text models + Gemini image models (Nano Banana) | Google per token |
+| Open model server | `LOCAL_LLM_BASE_URL` (+ `LOCAL_LLM_API_KEY`): any OpenAI-compatible server — your own Ollama, vLLM, LM Studio, llama.cpp, or a hosted open-weights provider (OpenRouter, Together, Fireworks, Groq, DeepInfra…); text | free on your own GPU / provider's price |
 
 There is no fixed model list: each route reports the models it offers (Router its catalog, the CLIs their own lists,
 OpenAI, Anthropic and Google their model lists) and the picker shows them all. The CLIs use their own login — OpenJutsu3D never signs in for you;
@@ -118,10 +119,13 @@ Run modes (the agent = text and image models; video = where LTX-2.5 runs, set by
 | OpenAI API (own key) | your own ComfyUI | text tested live and against a mock server; image + full build not yet run |
 | Anthropic API (own key) | your own ComfyUI | model list and a text call tested live, plus a mock server; full build not yet run |
 | Google Gemini API (own key) | your own ComfyUI | model list tested live; text and image against a mock server (live calls hit Google's free-tier limit / high demand) |
+| Open model server (e.g. Qwen 3.8 in llama.cpp on your GPU, Ollama) | your own ComfyUI | text call tested live (Ollama), model list live (llama.cpp Qwen), mock server; full build in progress |
 | any of the above | Comfy Cloud / a Comfy deployment (`COMFY_BASE_URL` empty or a deployment URL) | not yet run: needs the LTX-2.5 22B model and the Layout-To-Render IC-LoRA there |
 
-Not available yet: a fully local agent (Ollama, llama.cpp, vLLM — the OpenAI route uses the Responses API in
-background mode), and Claude/Gemini models through Router (they need their own request format).
+The open model server is how you run the agent on open weights (e.g. Qwen on your own GPU). Whether a model writes a
+good set is up to the model: small models build simple or broken sets. The look still still needs an image model from
+another route (not yet open-weights in this app). Not available yet: Claude/Gemini models through Router (they need
+their own request format).
 
 Example sets open instantly from the start page; the masquerade ball ships with its finished 28 s LTX render
 ([`web/public/examples/masquerade.mp4`](web/public/examples/masquerade.mp4)), made in this app from that set.
