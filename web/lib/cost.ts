@@ -12,7 +12,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DATA_DIR } from "./render";
-import type { Route } from "./models";
+import { SUBSCRIPTION, type Route } from "./models";
 
 export type Spend = { credits: number; unreported: number; usd: number; inTokens: number; outTokens: number; calls: number };
 const empty = (): Spend => ({ credits: 0, unreported: 0, usd: 0, inTokens: 0, outTokens: 0, calls: 0 });
@@ -41,7 +41,7 @@ const LOG = () => join(DATA_DIR, "costs.jsonl");
 export async function metered<T>(stage: string, use: { route: Route; model: string }, fn: () => Promise<T>): Promise<[T, Spend & { route: Route; model: string }]> {
   const s = empty();
   const out = await store.run(s, fn);
-  if (use.route !== "codex" && s.calls) {
+  if (!SUBSCRIPTION.includes(use.route) && s.calls) {
     await mkdir(DATA_DIR, { recursive: true }).catch(() => {});
     await appendFile(LOG(), JSON.stringify({ at: new Date().toISOString(), stage, ...use, ...s }) + "\n").catch(() => {});
   }
@@ -51,7 +51,7 @@ export async function metered<T>(stage: string, use: { route: Route; model: stri
 }
 /** Mean credits / USD of the last 5 logged runs of stage + model (null when there is no history yet). */
 export async function estimate(stage: string, route: Route, model: string): Promise<{ credits: number; usd: number; runs: number } | null> {
-  if (route === "codex") return { credits: 0, usd: 0, runs: 0 };
+  if (SUBSCRIPTION.includes(route)) return { credits: 0, usd: 0, runs: 0 };
   const rows = (await readFile(LOG(), "utf8").catch(() => "")).split("\n").filter(Boolean)
     .map((l) => { try { return JSON.parse(l); } catch { return null; } })
     .filter((r) => r && r.stage === stage && r.route === route && r.model === model && !r.unreported).slice(-5);

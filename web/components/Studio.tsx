@@ -21,7 +21,7 @@ import { FAST_MOTION, peakMotion } from "@/lib/fps48";
 
 type Use = { route: string; model: string };
 type Opt = { id: string; label: string; note?: string };
-type Config = { routes: string[]; options: Record<string, Record<"director" | "builder" | "look", Opt[]>>; defaults: Record<"director" | "builder" | "look", Use | null> };
+type Config = { routes: string[]; unavailable?: Record<string, string>; options: Record<string, Record<"director" | "builder" | "look", Opt[]>>; defaults: Record<"director" | "builder" | "look", Use | null> };
 type Question = { id: string; question: string; options: string[]; default: string };
 type Ready = { status: "ready"; brief: string; batches: string[]; assumptions: string[] };
 type Director = Ready | { status: "ask"; questions: Question[]; assumptions: string[] };
@@ -59,10 +59,15 @@ function pathKeys(code: string, cam: string | null): number[][] {
 const CHAT_MODES = { auto: "Auto", ask: "Ask first", go: "Don't ask", chat: "Chat only" } as const;
 const CHAT_MODE_HELP: Record<keyof typeof CHAT_MODES, string> = { auto: "Auto: ask only when the idea is unclear",
   ask: "Ask first: questions before building, and every change waits for your OK", go: "Don't ask: decide and build", chat: "Chat only: answers, no changes" };
-const ROUTE_LABEL: Record<string, string> = { router: "Comfy Router (credits)", codex: "Codex CLI (your subscription)", openai: "OpenAI API (your key)" };
-const ROUTE_NOTE: Record<string, string> = { router: "Model calls are charged to your Comfy credits.", codex: "Runs on your Codex subscription.",
+const ROUTE_LABEL: Record<string, string> = { router: "Comfy Router (credits)", codex: "Codex CLI (your subscription)", openai: "OpenAI API (your key)",
+  claude: "Claude Code (your subscription)", agy: "Antigravity CLI (your subscription)", anthropic: "Anthropic API (your key)", google: "Google Gemini API (your key)" };
+const SUBSCRIPTION = ["codex", "claude", "agy"];
+const ROUTE_NOTE: Record<string, string> = { router: "Model calls are charged to your Comfy credits.", codex: "Runs on your Codex subscription.", claude: "Runs on your Claude subscription.", agy: "Runs on your Antigravity subscription.", anthropic: "Model calls are charged to your Anthropic API key.", google: "Model calls are charged to your Google API key.",
   openai: "Model calls are charged to your OpenAI API key." };
-const EXAMPLES = [
+// `video`: the example ships with a finished render of the set (shown on its card), made in this app.
+const EXAMPLES: { id: string; title: string; prompt: string; video?: boolean }[] = [
+  { id: "masquerade", title: "Masquerade ball — with its render", video: true,
+    prompt: "A pastel 1930s grand hotel lobby transformed for a colourful masquerade ball, warm golden-hour sunlight streaming through tall arched windows. Pink walls with mint-green trim, a pink-and-cream checkerboard marble floor, a wide central staircase with a red carpet rising to a balcony, brass birdcage lifts on both sides, one large crystal chandelier. Big festive dressing that reads clearly on camera: tall arrangements of pink and coral roses in brass urns, long silk banners in teal, gold and magenta hanging from the balcony, a buffet table with a tall tiered pastel cake, pink velvet sofas, potted palms. Seven masquerade guests in ornate Venetian masks that cover the whole face and elaborate jewel-coloured costumes (an emerald ball gown, a ruby ball gown, a sapphire tailcoat, a golden harlequin suit, a violet cape with a feather headdress): two couples dancing in the middle of the floor, one guest walking down the staircase, one at the cake table, one posing at the balcony railing. No visible faces anywhere, every face is a mask. Joyful, warm and colourful, whimsical but photoreal. Six cameras, each looking a different way: a wide view from the entrance across the dance floor to the staircase; a high view from the balcony looking down over the dancers; a low view close to one dancing couple; a view from the foot of the staircase looking up at the guest walking down; a close view of the cake table and the guest beside it; a reverse view from the middle of the staircase looking back toward the sunlit windows with the dancers between." },
   { id: "dungeon", title: "Steampunk dungeon", prompt: "An underground dungeon with medieval torture devices in steampunk style" },
   { id: "neon", title: "Neon alley in the rain", prompt: "A narrow rainy neon alley at night with a ramen stall" },
   { id: "city", title: "Medieval city", prompt: "A dense medieval walled city at golden hour with a cathedral, river and castle" },
@@ -363,7 +368,7 @@ export default function Studio() {
       setPrompt(ex.prompt); setTitle(ex.title); setBrief({ status: "ready", brief: ex.prompt, batches: [], assumptions: [] });
       const { r } = await a.commitVersion(src, "Example set", [], -1); setCam(r.cameras[0] ?? null); setBuilt(true);
       if (r.cameras[0]) await bridge.current?.view(r.cameras[0]);   // open looking through the set's main camera
-      a.push({ kind: "note", text: `Opened the example set "${ex.title}": ${r.stats.objects} objects, ${r.cameras.length} cameras. Pick a camera and a move below, or tell me what to change.` });
+      a.push({ kind: "note", text: `Opened the example set "${ex.title}": ${r.stats.objects} objects, ${r.cameras.length} cameras. Pick a camera and a move below, or tell me what to change.${ex.video ? ` Its finished LTX render plays on the example's card on the start page (/examples/${ex.id}.mp4).` : ""}` });
     });
   }
   function openSaved(id: string) {
@@ -740,10 +745,12 @@ export default function Studio() {
   // Render helpers, NOT components: a component defined inside Studio is a new type on every render, so React
   // remounted the native <select> each second and an open dropdown closed by itself.
   const modelChip = () => (
-    <label className="pill" title="Model that plans and builds the set">{Icon.model}{curLabel}{curBuilder?.route === "codex" ? " (subscription)" : ""}
+    <label className="pill" title="Model that plans and builds the set">{Icon.model}{curLabel}{curBuilder && SUBSCRIPTION.includes(curBuilder.route) ? " (subscription)" : ""}
       <select aria-label="Model" value={curBuilder ? `${curBuilder.route}|${curBuilder.model}` : ""} onChange={(e) => { const [route, model] = e.target.value.split("|"); setBuilderUse({ route, model }); }}>
         {config?.routes.map((r) => <optgroup key={r} label={ROUTE_LABEL[r] ?? r}>
           {(config.options[r]?.builder ?? []).map((o) => <option key={o.id} value={`${r}|${o.id}`}>{o.label}{o.note ? `, ${o.note}` : ""}</option>)}</optgroup>)}
+        {Object.entries(config?.unavailable ?? {}).map(([r, why]) => <optgroup key={r} label={`${ROUTE_LABEL[r] ?? r} — not available`}>
+          <option disabled value={`${r}|-`}>{why}</option></optgroup>)}
       </select></label>);
   const aspectChip = (locked = false) => (
     <label className="pill" title={locked ? "Frame format (fixed once takes exist)" : "Frame format"}>{Icon.frame}{aspect}
@@ -772,7 +779,7 @@ export default function Studio() {
   // ---------- cost preview (P6): mean of this machine's recent build steps with the chosen builder ----------
   const builderKey = `${use("builder")?.route}|${use("builder")?.model}`;
   useEffect(() => {
-    const u = use("builder"); if (!u || u.route === "codex") { setEst(null); return; }
+    const u = use("builder"); if (!u || SUBSCRIPTION.includes(u.route)) { setEst(null); return; }
     api<{ estimate: { credits: number; usd: number; runs: number } | null }>(`/api/costs?stage=build&route=${u.route}&model=${encodeURIComponent(u.model)}`)
       .then((r) => setEst(r.estimate)).catch(() => setEst(null));
   }, [builderKey, spend.credits]);   // eslint-disable-line react-hooks/exhaustive-deps -- refresh after each priced call
@@ -920,8 +927,11 @@ export default function Studio() {
         <section className="section">
           <h2>Start with an example</h2>
           <div className="grid4">{EXAMPLES.map((ex) => (
-            <button key={ex.id} className="card" onClick={() => openExample(ex)}><div className="pic"><img src={`/examples/${ex.id}.jpg`} alt="" /></div>
-              <div className="meta">{ex.title}<small>Opens instantly</small></div></button>))}</div>
+            <button key={ex.id} className="card" onClick={() => openExample(ex)}><div className="pic">{ex.video
+                ? <video src={`/examples/${ex.id}.mp4`} poster={`/examples/${ex.id}.jpg`} muted loop playsInline preload="none"
+                    onMouseEnter={(e) => { void e.currentTarget.play().catch(() => {}); }} onMouseLeave={(e) => e.currentTarget.pause()} />
+                : <img src={`/examples/${ex.id}.jpg`} alt="" />}</div>
+              <div className="meta">{ex.title}<small>{ex.video ? "Opens instantly · hover to play the LTX render" : "Opens instantly"}</small></div></button>))}</div>
         </section>
       </main>
     </div>

@@ -10,7 +10,7 @@ export async function POST(req: Request) {
   if (typeof b.request !== "string" || !b.request.trim() || b.request.length > 2000 || typeof b.codeSoFar !== "string" || !b.codeSoFar.trim())
     return fail(new Error("Say what to change (1–2000 characters)."), 400);
   try {
-    const use = choose("builder", b.use);
+    const use = await choose("builder", b.use);
     const [code, cost] = await metered("change", use, () => changeScene(use, { prompt: String(b.prompt || ""), brief: String(b.brief || ""),
       codeSoFar: b.codeSoFar, request: b.request, refs: readRefs(b.refs) }));
     return ok({ code, cost });

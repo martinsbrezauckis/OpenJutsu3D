@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export async function GET(req: Request) {
   try {
     const q = new URL(req.url).searchParams; const stage = q.get("stage") || "build";
-    const use = choose(stage === "look" || stage === "concept" ? "look" : stage === "director" ? "director" : "builder", { route: q.get("route") ?? undefined, model: q.get("model") ?? undefined });
+    const use = await choose(stage === "look" || stage === "concept" ? "look" : stage === "director" ? "director" : "builder", { route: q.get("route") ?? undefined, model: q.get("model") ?? undefined });
     return ok({ stage, ...use, estimate: await estimate(stage, use.route, use.model) });
   } catch (e) { return fail(e); }
 }

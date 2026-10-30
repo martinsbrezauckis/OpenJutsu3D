@@ -29,7 +29,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       const anchor = await readFile(join(d, "look_s0.png")).catch(() => null);
       if (anchor) refs = [{ bytes: new Uint8Array(anchor), type: "image/png", label: "the opening shot of this same scene" }, ...refs];
     }
-    const u = choose("look", use);
+    const u = await choose("look", use);
     const sz = ["1536x1024", "1024x1536", "1024x1024"].includes(size) ? size : "1536x1024";
     const fmt = /^[0-9]{1,2}:[0-9]{1,2} [a-z]{3,10}$/.test(String(format)) ? String(format) : undefined;
     const name = k ? `look_raw_s${k}` : "look_raw";

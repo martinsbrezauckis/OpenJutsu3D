@@ -89,26 +89,42 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
 - **LTX-2.5** (Lightricks, open weights) with the Layout-To-Render IC-LoRA.
 - **three.js** (Scene Kit, viewport, clay/lit renders, GLB export), **Next.js 16** + React 19.
 
-Model routes, chosen with the model picker in the app (planning and the look still follow the picked route; only
-routes this machine can use are listed):
+Model routes, chosen with the model picker in the app (planning and the look still follow the picked route; a route
+with no image model hands the look still to one that has):
 
 | Route | What it uses | Cost |
 |---|---|---|
-| Comfy Router (default) | `COMFY_API_KEY`; GPT 6 Sol / Astra, Claude, Gemini, GPT Image 2.5 … | Comfy credits per call |
-| Codex CLI | your ChatGPT subscription through the `codex` CLI (local use) | no per-call cost |
-| OpenAI API | `OPENAI_API_KEY`, for models Router does not carry yet (e.g. GPT 6.1 Terra) | OpenAI per token |
+| Comfy Router | `COMFY_API_KEY`; the OpenAI text and GPT Image models in Router's live catalog | Comfy credits per call |
+| Codex CLI | your ChatGPT subscription through the `codex` CLI (local use); text + GPT Image | no per-call cost |
+| Claude Code | your Claude subscription through the `claude` CLI (local use); Opus / Sonnet / Haiku, text only | no per-call cost |
+| Antigravity CLI | your Google subscription through the `agy` CLI (local use); Gemini, Claude, GPT-OSS + Nano Banana images | no per-call cost |
+| OpenAI API | `OPENAI_API_KEY`; the models your key lists | OpenAI per token |
+| Anthropic API | `ANTHROPIC_API_KEY`; the Claude models your key lists (text only) | Anthropic per token |
+| Google Gemini API | `GEMINI_API_KEY`; Gemini text models + Gemini image models (Nano Banana) | Google per token |
+
+There is no fixed model list: each route reports the models it offers (Router its catalog, the CLIs their own lists,
+OpenAI, Anthropic and Google their model lists) and the picker shows them all. The CLIs use their own login — OpenJutsu3D never signs in for you;
+a CLI that is not installed or not logged in shows as "not available", as does a route without its key. Video is not a
+free choice: the Layout-To-Render LoRA is what makes LTX follow the 3D layout frame by frame.
 
 Run modes (the agent = text and image models; video = where LTX-2.5 runs, set by `COMFY_BASE_URL`):
 
 | Agent | Video | Status |
 |---|---|---|
-| Codex CLI subscription (local install) | your own ComfyUI (local GPU or a LAN box) | tested end to end — every demo shot |
-| Comfy Router (credits) | your own ComfyUI | wired, not yet run end to end (needs Comfy credits) |
+| Codex CLI subscription | your own ComfyUI (local GPU or a LAN box) | tested end to end — every demo shot |
+| Claude Code subscription (look still from another route) | your own ComfyUI | set built end to end in the app |
+| Antigravity CLI subscription | your own ComfyUI | text and image calls tested; full build not yet run |
+| Comfy Router (credits) | your own ComfyUI | plan, concept picture and set built end to end in the app (GPT 6 Astra + GPT Image; one set ≈ $5 of credits) |
 | OpenAI API (own key) | your own ComfyUI | text tested live and against a mock server; image + full build not yet run |
+| Anthropic API (own key) | your own ComfyUI | model list and a text call tested live, plus a mock server; full build not yet run |
+| Google Gemini API (own key) | your own ComfyUI | model list tested live; text and image against a mock server (live calls hit Google's free-tier limit / high demand) |
 | any of the above | Comfy Cloud / a Comfy deployment (`COMFY_BASE_URL` empty or a deployment URL) | not yet run: needs the LTX-2.5 22B model and the Layout-To-Render IC-LoRA there |
 
-Not available yet: a fully local agent (Ollama, llama.cpp, vLLM — the OpenAI route uses the Responses API in background
-mode) and a Claude subscription as the agent (Claude works through Comfy Router).
+Not available yet: a fully local agent (Ollama, llama.cpp, vLLM — the OpenAI route uses the Responses API in
+background mode), and Claude/Gemini models through Router (they need their own request format).
+
+Example sets open instantly from the start page; the masquerade ball ships with its finished 28 s LTX render
+([`web/public/examples/masquerade.mp4`](web/public/examples/masquerade.mp4)), made in this app from that set.
 
 ## Setup
 
@@ -135,7 +151,8 @@ npm run dev                                         # http://127.0.0.1:3000
   `vae/ltx-2.5-video-vae-bf16.safetensors`, `vae/ltx-2.5-audio-vae-bf16.safetensors`,
   `latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors`,
   `loras/ltx-2.5-22b-ic-lora-layout-to-render-1.0.safetensors`.
-- Optional: `LLM_PROVIDER=codex` with `CODEX_HOME` to use a Codex subscription; `OPENAI_API_KEY` for the OpenAI route.
+- Optional: `LLM_PROVIDER=codex` (or `claude`, `agy`) to prefer a subscription CLI; `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+  `GEMINI_API_KEY` for the own-key routes.
 - Model packs are added in the app (Add › Model from the library › Packs). For a large local collection, e.g.
   [Scenario's 3D Collection](https://huggingface.co/datasets/scenario-labs/3d-collection) (CC BY 4.0, ~37 GB), add its
   folder; `bench/build_library.py` + `bench/caption_library.py` can first give its models names and real sizes

@@ -94,7 +94,7 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .card-wrap:hover .card-acts, .card-wrap:focus-within .card-acts { display: flex; }
 .card-acts .ghost { padding: 3px 9px; font-size: 12px; background: rgb(27 21 32 / 88%); border: 1px solid var(--line); border-radius: 8px; color: var(--text); }
 .card .pic { aspect-ratio: 16 / 9; background: var(--field); overflow: hidden; display: grid; place-items: center; }
-.card .pic img { width: 100%; height: 100%; object-fit: cover; transition: transform .2s ease; display: block; }
+.card .pic img, .card .pic video { width: 100%; height: 100%; object-fit: cover; transition: transform .2s ease; display: block; }
 .card:hover .pic img { transform: scale(1.03); }
 .card .meta { padding: 10px 12px 12px; display: grid; gap: 2px; font-size: 14px; }
 .card .meta small { color: var(--muted); font-size: 12px; }

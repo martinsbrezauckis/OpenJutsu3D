@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   if (typeof b.brief !== "string" || !b.brief.trim()) return fail(new Error("no brief"), 400);
   try {
     const refs = readRefs(b.refs);
-    const use = choose("look", b.use);
+    const use = await choose("look", b.use);
     const [img, cost] = await metered("concept", use, () => image(STYLE + b.brief + (refs.length === 1 && !refs[0].label ? " Match the style of the reference picture."
       : refs.length ? ` Match the style of the reference pictures, and give the people, things and places they show their look (${refList(refs, 1)}).` : ""), refs,
       { ...use, quality: "medium", size: "1536x1024" }));

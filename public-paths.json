@@ -36,6 +36,7 @@
     "bench/build_samples.mts",
     "bench/cost_mock_test.mjs",
     "bench/openai_route_mock_test.mts",
+    "bench/keys_route_mock_test.mts",
     "bench/segments_test.mts",
     "bench/zip_guard_test.mts",
     "bench/ip_policy_test.mts",
