@@ -3,6 +3,8 @@
   "include": [
     "README.md",
     "LICENSE",
+    ".github/workflows/ci.yml",
+    "SECURITY.md",
     "public-paths.json",
     "tools/public-export.mjs",
     "web/",

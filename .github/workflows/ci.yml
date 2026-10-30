@@ -1,0 +1,42 @@
+# OpenJutsu3D continuous integration.
+#
+# Runs `npm test` in web/ for every push and pull request: the TypeScript type check and the offline tests (cost
+# metering, the OpenAI route against a mock server, render segments, zip and address guards, scene code, shot intent,
+# 48 fps, references, camera cuts). No GPU, no model calls, no secrets; read-only repository permission. Third-party
+# actions are pinned to full commit SHAs (the tag is in the comment).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: ffmpeg (used by the video tests)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - run: npm ci
+      - run: npm test
