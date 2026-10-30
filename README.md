@@ -119,7 +119,7 @@ Run modes (the agent = text and image models; video = where LTX-2.5 runs, set by
 | OpenAI API (own key) | your own ComfyUI | text tested live and against a mock server; image + full build not yet run |
 | Anthropic API (own key) | your own ComfyUI | model list and a text call tested live, plus a mock server; full build not yet run |
 | Google Gemini API (own key) | your own ComfyUI | model list tested live; text and image against a mock server (live calls hit Google's free-tier limit / high demand) |
-| Open model server (e.g. Qwen 3.8 in llama.cpp on your GPU, Ollama) | your own ComfyUI | text call tested live (Ollama), model list live (llama.cpp Qwen), mock server; full build in progress |
+| Open model server (e.g. Qwen 3.8 in llama.cpp on your GPU, Ollama) | your own ComfyUI | text call tested live (Ollama), model list live (llama.cpp Qwen), mock server; full build not yet run |
 | any of the above | Comfy Cloud / a Comfy deployment (`COMFY_BASE_URL` empty or a deployment URL) | not yet run: needs the LTX-2.5 22B model and the Layout-To-Render IC-LoRA there |
 
 The open model server is how you run the agent on open weights (e.g. Qwen on your own GPU). Whether a model writes a
