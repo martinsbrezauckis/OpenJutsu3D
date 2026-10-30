@@ -59,12 +59,12 @@ for (const rec of ["dolly-in:4", "dolly-in:4+arc-left:6:2.5+crane-up:5", "whip-p
 const vis = (name: string) => [{ name: "ENV_floor", category: "ENV", labels: ["oak"], cover: 0.5 }, { name, category: "PRP", labels: ["wood"], cover: 0.2 }];
 const sentence = pc.moveSentence("dolly-in:2+static-shot:2@CAM_closeup+arc-left:2@CAM_barrels", { cuts: { 1: { cam: "CAM_closeup", visible: vis("PRP_table_01_mugs") }, 2: { cam: "CAM_barrels", visible: vis("PRP_barrel_stack") } } });
 console.log(sentence);
-ok["prompt reads the shots in order"] = sentence === "The camera dollies slowly in; cut to a close-up of the table mugs, a locked-off static shot; cut to a new angle on the barrel stack as the camera arcs slowly to the left.";
+ok["prompt reads the shots in order"] = sentence === "The camera dollies in; cut to a close-up of the table mugs, a locked-off static shot; cut to a new angle on the barrel stack as the camera arcs to the left.";
 const far = [{ name: "PRP_barrel_stack", category: "PRP", labels: ["oak"], cover: 0.3 }, { name: "CHAR_patron", category: "CHAR", labels: ["person"], cover: 0.01 }];
 const close = [{ name: "PRP_barrel_stack", category: "PRP", labels: ["oak"], cover: 0.3 }, { name: "CHAR_patron", category: "CHAR", labels: ["person"], cover: 0.12 }];
 ok["cut subject: the dominant thing, a person when big enough"] = pc.moveSentence("static-shot:1+static-shot:1@CAM_b", { cuts: { 1: { cam: "CAM_b", visible: far } } }).includes("on the barrel stack")
   && pc.moveSentence("static-shot:1+static-shot:1@CAM_b", { cuts: { 1: { cam: "CAM_b", visible: close } } }).includes("on the patron");
-ok["old prompt sentence unchanged"] = pc.moveSentence("dolly-in:4+arc-left:6:2.5") === "The camera dollies slowly in, then the camera arcs slowly to the left.";
+ok["two-move prompt sentence"] = pc.moveSentence("dolly-in:4+arc-left:6:2.5") === "The camera dollies in, then the camera arcs to the left.";
 ok["span: a long-shot part describes only its shots"] = pc.moveSentence("dolly-in:2+static-shot:2@CAM_wide", { span: [1, 1], cuts: { 1: { cam: "CAM_wide", visible: [] } } }) === "A locked-off static shot.";
 
 // --- 48 fps: a cut is not camera motion ---

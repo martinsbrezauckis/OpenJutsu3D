@@ -109,6 +109,8 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .msgs { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
 .msg { max-width: 94%; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; }
 .msg.user { align-self: flex-end; background: var(--yellow); color: var(--ink); }
+.msg.user.folded { cursor: pointer; flex-shrink: 0; }   /* the chat column must not squeeze it */
+.msg.user.folded .clamp { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
 .msg.user img { display: block; width: 120px; border-radius: 8px; margin-top: 6px; }
 .msg.user .refrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .msg.user .refrow img { width: 56px; height: 40px; object-fit: cover; margin: 0; }
@@ -163,7 +165,11 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .cam img, .cam .ph { display: block; width: 96px; height: 54px; object-fit: cover; }
 .cam span { position: absolute; left: 4px; bottom: 3px; padding: 0 4px; border-radius: 4px; background: rgb(0 0 0 / 60%); font-size: 10.5px; }
 .cam[aria-pressed="true"] { border-color: var(--yellow); }
-.shotbar .grow { flex: 1; }
+.shotbar { flex-direction: column; align-items: stretch; gap: 10px; }
+.shotbar .cams { overflow-x: auto; scrollbar-width: thin; padding-bottom: 2px; }
+.shotctl { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
+.shotctl .group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.shotctl .outs { margin-left: auto; }
 .thumb { width: 96px; height: 54px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
 
 /* timeline: the camera move with a playhead */
@@ -219,6 +225,7 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .obj-list summary { cursor: pointer; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted, #9a90a6); padding: 6px 8px 2px; }
 .obj-list summary span { opacity: .7; }
 .obj-list details { display: grid; }
+.obj-list details button { display: block; width: 100%; }   /* one object per row (short names paired up inline) */
 .scene-panel { position: absolute; top: 56px; left: 12px; width: 280px; display: grid; gap: 12px; padding: 14px; border-radius: 10px;
   background: rgb(27 21 32 / .92); border: 1px solid var(--line); font-size: 13px; }
 .scene-panel label { display: grid; gap: 6px; grid-template-columns: 1fr auto; align-items: center; }

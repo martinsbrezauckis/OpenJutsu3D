@@ -48,7 +48,10 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
 - Frame formats 16:9, 9:16, 1:1, 4:3, 3:4 and 21:9 (2.35:1), all rendered natively by LTX.
 - People: animated actors (walk a path — also up stairs and slopes —, stand, talk, sit, jog, dance …) that the
   builder stages from your words or that you add by hand; every frame of a shot shows the same pose, so the render
-  follows them exactly.
+  follows them exactly. Walkers keep a natural pace (a long shot on a short path walks it round or back and forth, not
+  in slow motion) and ease into turns. Clothes are painted onto the moving body, so sleeves and trousers move with the
+  limbs; helmets, masks and backpacks ride the head or chest; crates and trays are held in both hands, cans and bags
+  hang from one hand.
 - Your own characters: import a rigged character as .glb or .fbx (e.g. downloaded from Mixamo); it plays its own
   motion, and a motion file imported with a person selected gives that person the motion (motions from one Mixamo
   character fit the others). We ship no Mixamo files — bring your own.
@@ -86,13 +89,26 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
 - **LTX-2.5** (Lightricks, open weights) with the Layout-To-Render IC-LoRA.
 - **three.js** (Scene Kit, viewport, clay/lit renders, GLB export), **Next.js 16** + React 19.
 
-Model routes, chosen per stage in the app:
+Model routes, chosen with the model picker in the app (planning and the look still follow the picked route; only
+routes this machine can use are listed):
 
 | Route | What it uses | Cost |
 |---|---|---|
 | Comfy Router (default) | `COMFY_API_KEY`; GPT 6 Sol / Astra, Claude, Gemini, GPT Image 2.5 … | Comfy credits per call |
 | Codex CLI | your ChatGPT subscription through the `codex` CLI (local use) | no per-call cost |
 | OpenAI API | `OPENAI_API_KEY`, for models Router does not carry yet (e.g. GPT 6.1 Terra) | OpenAI per token |
+
+Run modes (the agent = text and image models; video = where LTX-2.5 runs, set by `COMFY_BASE_URL`):
+
+| Agent | Video | Status |
+|---|---|---|
+| Codex CLI subscription (local install) | your own ComfyUI (local GPU or a LAN box) | tested end to end — every demo shot |
+| Comfy Router (credits) | your own ComfyUI | wired, not yet run end to end (needs Comfy credits) |
+| OpenAI API (own key) | your own ComfyUI | text tested live and against a mock server; image + full build not yet run |
+| any of the above | Comfy Cloud / a Comfy deployment (`COMFY_BASE_URL` empty or a deployment URL) | not yet run: needs the LTX-2.5 22B model and the Layout-To-Render IC-LoRA there |
+
+Not available yet: a fully local agent (Ollama, llama.cpp, vLLM — the OpenAI route uses the Responses API in background
+mode) and a Claude subscription as the agent (Claude works through Comfy Router).
 
 ## Setup
 

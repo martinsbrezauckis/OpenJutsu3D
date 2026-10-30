@@ -190,7 +190,7 @@ export class SceneKit {
     this.actors = [];                         // animated people: posed by animate(t) from the shot time
     // mesh -> its own material for imported models. NOT in userData: clone() JSON-copies userData and the GLB exporter
     // writes it into extras, both of which would mangle a material object.
-    this._lit = new WeakMap();
+    this._lit = new WeakMap(); this._rewear = new Map();
     this.textures = opts.textures || {};
     this.mode = 'lit';
     this.clay = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.9, metalness: 0, name: 'MAT_clay' });
@@ -350,10 +350,20 @@ export class SceneKit {
       pts = path.map((p) => (p.length >= 3 ? new THREE.Vector3(p[0], p[1], p[2]) : new THREE.Vector3(p[0], pos[1], p[1]))); lens = [0];
       for (let i = 1; i < pts.length; i++) lens.push(total += pts[i].distanceTo(pts[i - 1]));
     }
-    const rate = walks && natural ? Math.min(1.6, Math.max(0.5, speed / natural)) : 1;
-    const a = { g: body, mixer, act, idle, pts, lens, total, speed, rate, offset };
+    const a = { g: body, mixer, act, idle, pts, lens, total, speed, rate: 1, offset };
+    this._pace(a, walks ? natural : undefined);
     g.userData = { kind: 'object', category, meshes, triangles: Math.round(tris), ...data };
-    this.actors.push(a); this._pose(a, 0);
+    this.actors.push(a);
+    const re = this._rewear.get(name); this._rewear.delete(name);
+    if (re) {
+      if (re.hold) { try { a.hold = this._holdPose(a); } catch { /* another skeleton: arms free */ } }
+      for (const it of re.items) {
+        let h = a.g; if (it.bone) { h = null; a.g.traverse((x) => { if (!h && x.isBone && x.name === it.bone) h = x; }); }
+        if (!h) { this.names.delete(it.c.name); continue; }   // another skeleton: the thing goes
+        h.add(it.c); it.c.position.copy(it.pos); it.c.quaternion.copy(it.quat); it.c.scale.copy(it.scale);
+      }
+    }
+    this._pose(a, 0);
     this.root.add(g); this.stats.objects++; this.stats.meshes += meshes; this.stats.triangles += Math.round(tris);
     this._markBase(g); this.onCommit(g, { name, kind: 'object' });
     return g;
@@ -368,32 +378,190 @@ export class SceneKit {
   wear(name, ...props) {
     const o = this.root.getObjectByName(name), a = o && this.actors.find((x) => x.g === o || x.g.parent === o);
     if (!a) throw new Error(`wear: '${name}' is not an animated figure`);
+    // Optional last argument {bone: 'head' | 'chest' | 'hips' | 'hand_l' | 'hand_r'}: the props ride that bone (a helmet
+    // nods and turns with the head) instead of the whole body.
+    const opts = props.length && props[props.length - 1] && typeof props[props.length - 1] === 'object' && !Array.isArray(props[props.length - 1]) ? props.pop() : {};
+    const holder = opts.bone ? this._bone(a, opts.bone) : a.g;
     this._pose(a, -a.offset); this.root.updateMatrixWorld(true);   // the walk's start, whatever the stagger
+    // Builders place a helmet or pack where it sits on a STANDING figure; a kneeling or leaning pose moves the bone.
+    // Head/chest/hips props move from the bone's standing (rest) place to its posed place first. Hands are left as
+    // placed: a rest-pose hand is not where a carried thing is built.
+    const fix = opts.bone && /^(head|chest|hips)$/.test(opts.bone) ? this._restToPose(holder) : null;
     for (const p of props.flat()) {
       const w = this.root.getObjectByName(p);
-      if (!w || w.userData.kind !== 'object' || w === o || w.parent !== this.root) throw new Error(`wear: no free object '${p}'`);
-      a.g.attach(w); w.userData.wornBy = name;
+      if (!w || w.userData.kind !== 'object' || w === o || (w.parent !== this.root && !w.userData.wornBy)) throw new Error(`wear: no free object '${p}'`);
+      if (w.parent === holder && w.userData.wornBy === name) continue;   // already worn just so (a re-created figure)
+      const posed = w.parent !== this.root;
+      if (posed) this.root.attach(w);   // worn before: take it back (a change of how it is worn); it sits as posed
+      if (fix && !posed) w.applyMatrix4(fix);
+      holder.attach(w); w.userData.wornBy = name;
     }
     this._pose(a, 0);
     return o;
   }
+  /**
+   * Something an animated figure CARRIES, held in its hands while it walks (a worn prop floats in front of a swinging
+   * arm). hands: 'right' | 'left' — hangs from that hand and swings with the arm (watering can, bucket, bag, lantern);
+   * 'both' — the arms hold still in front (the legs keep walking) and the thing sits between the hands (crate, box,
+   * tray, basket). Build the prop anywhere near the figure, commit it, then carry it: the kit moves it into the hands.
+   *   kit.carry('CHAR_gardener', 'PRP_tomato_crate', { hands: 'both' })
+   */
+  carry(name, prop, { hands = 'both' } = {}) {
+    const o = this.root.getObjectByName(name), a = o && this.actors.find((x) => x.g === o || x.g.parent === o);
+    if (!a) throw new Error(`carry: '${name}' is not an animated figure`);
+    if (!['both', 'right', 'left'].includes(hands)) throw new Error(`carry: hands is 'both', 'right' or 'left'`);
+    const w = this.root.getObjectByName(prop);
+    if (!w || w.userData.kind !== 'object' || w === o || (w.parent !== this.root && !w.userData.wornBy)) throw new Error(`carry: no free object '${prop}'`);
+    if (hands === 'both') a.hold = this._holdPose(a);
+    this._pose(a, -a.offset); this.root.updateMatrixWorld(true);   // the walk's start, arms already holding
+    if (w.parent !== this.root) this.root.attach(w);     // worn or carried before: take it back first
+    const box = new THREE.Box3().setFromObject(w), c = box.getCenter(new THREE.Vector3()), at = new THREE.Vector3();
+    if (hands === 'both') {
+      const l = this._bone(a, 'hand_l').getWorldPosition(new THREE.Vector3()), r = this._bone(a, 'hand_r').getWorldPosition(new THREE.Vector3());
+      at.addVectors(l, r).multiplyScalar(0.5);
+      w.position.add(at.sub(c));                         // centre of the thing between the hands
+      this._bone(a, 'chest').attach(w);                  // arms are fixed to the chest while holding: hands stay on it
+    } else {
+      this._bone(a, hands === 'right' ? 'hand_r' : 'hand_l').getWorldPosition(at);
+      w.position.add(at.sub(new THREE.Vector3(c.x, box.max.y - 0.03, c.z)));   // its top (the handle) in the hand
+      this._bone(a, hands === 'right' ? 'hand_r' : 'hand_l').attach(w);
+    }
+    w.userData.wornBy = name;
+    this._pose(a, 0);
+    return o;
+  }
+  /** Arm bones' rotations from the driving clip (hands in front at lower-chest height, 0.35 m apart; the push clip
+   *  leans the torso, so its arms on an upright body point up) — held over any walk while carrying. */
+  _holdPose(a) {
+    const clip = this.character?.animations.find((c) => c.name === 'Driving_Loop');
+    if (!clip) throw new Error('carry: no holding pose in this figure');
+    const hold = [], arm = /shoulder|upper_?arm|forearm|hand|thumb|index|middle|ring|pinky|finger/;
+    for (const tr of clip.tracks) {
+      const p = THREE.PropertyBinding.parseTrackName(tr.name);
+      if (p.propertyName !== 'quaternion' || !arm.test(boneKey(p.nodeName).replace(/^def-/, ''))) continue;
+      let bone = null; a.g.traverse((x) => { if (!bone && x.isBone && x.name === p.nodeName) bone = x; });
+      if (bone) hold.push([bone, new THREE.Quaternion().fromArray(tr.createInterpolant().evaluate(clip.duration * 0.25))]);
+    }
+    if (!hold.length) throw new Error('carry: this figure has no arm bones to hold with (use hands: right or left)');
+    return hold;
+  }
+  _hold(a) { for (const [b, q] of a.hold) b.quaternion.copy(q); }
+  /** Local-space (root) transform that carries things from `bone`'s rest place to its current posed place. */
+  _restToPose(bone) {
+    let mesh = null, i = -1;
+    bone.parent && this.root.traverse((o) => { if (!mesh && o.isSkinnedMesh) { const k = o.skeleton.bones.indexOf(bone); if (k >= 0) { mesh = o; i = k; } } });
+    if (!mesh) return null;
+    // At rest the skinning is identity: boneWorld = meshWorld · bindMatrix⁻¹ · boneInverse⁻¹ (bindMode 'attached').
+    const rest = mesh.matrixWorld.clone().multiply(mesh.bindMatrix.clone().invert()).multiply(mesh.skeleton.boneInverses[i].clone().invert());
+    const worldFix = bone.matrixWorld.clone().multiply(rest.invert());
+    const r = this.root.matrixWorld;
+    return r.clone().invert().multiply(worldFix).multiply(r);
+  }
+  _bone(a, key) {
+    const want = { head: /head$/, chest: /spine\.?00?3$|spine2$|chest$/, hips: /hips$/, hand_l: /hand\.?l$|lefthand$/, hand_r: /hand\.?r$|righthand$/ }[key];
+    if (!want) throw new Error(`wear: unknown bone '${key}' (head, chest, hips, hand_l, hand_r)`);
+    let b = null; a.g.traverse((x) => { if (!b && x.isBone && want.test(boneKey(x.name).replace(/^def-/, ''))) b = x; });
+    if (!b) throw new Error(`wear: this figure has no '${key}' bone`);
+    return b;
+  }
+  /**
+   * Clothes painted ON an animated figure, by body region, so sleeves, trousers and boots move with its limbs
+   * (a rigid box over a limb lets the walking mannequin's arms and legs swing out through it, and the video model
+   * then paints extra arms and legs). Colours '#rrggbb'; a region left out keeps the mannequin's neutral colour.
+   *   kit.dress('CHAR_astronaut', { top: '#e8dcc4', bottom: '#e8dcc4', shoes: '#5a4a3a', gloves: '#e07a2a' })
+   * top = torso + arms (sleeves: false leaves the arms bare), bottom = hips + legs, shoes = feet, gloves = hands,
+   * head = head + neck (a hood, a balaclava, a mask colour). roughness 0–1 (0.6), metalness 0–1 (0).
+   */
+  dress(name, { top, bottom, shoes, gloves, head, sleeves = true, roughness = 0.6, metalness = 0 } = {}) {
+    const o = this.root.getObjectByName(name), a = o && this.actors.find((x) => x.g === o || x.g.parent === o);
+    if (!a) throw new Error(`dress: '${name}' is not an animated figure`);
+    const base = new THREE.Color(0xc9c2b8), col = (c) => (c ? new THREE.Color(c) : base);
+    const pick = { top: col(top), arm: sleeves ? col(top) : base, bottom: col(bottom), shoes: col(shoes), gloves: col(gloves), head: col(head) };
+    const region = (bone) => {
+      const k = boneKey(bone.name).replace(/^def-/, '');
+      if (/hand|thumb|index|middle|ring|pinky|finger/.test(k)) return 'gloves';
+      if (/foot|toe/.test(k)) return 'shoes';
+      if (/head|neck/.test(k)) return 'head';
+      if (/thigh|shin|upleg|leg|hips|pelvis/.test(k)) return 'bottom';
+      if (/arm/.test(k)) return 'arm';
+      return 'top';
+    };
+    let dressed = 0;
+    a.g.traverse((m) => {
+      if (!m.isSkinnedMesh) return;
+      const g = (m.geometry = m.geometry.clone());   // clones share geometry: colour this figure only
+      const si = g.attributes.skinIndex, sw = g.attributes.skinWeight, n = g.attributes.position.count;
+      const regions = m.skeleton.bones.map(region), c = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        let best = 0, w = -1;
+        for (let j = 0; j < 4; j++) { const wj = sw.getComponent(i, j); if (wj > w) { w = wj; best = si.getComponent(i, j); } }
+        const rc = pick[regions[best]] || base; c[i * 3] = rc.r; c[i * 3 + 1] = rc.g; c[i * 3 + 2] = rc.b;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+      const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness, name: 'MAT_clothes' });
+      this._lit.set(m, mat); if (this.mode !== 'clay') m.material = mat;
+      dressed++;
+    });
+    if (!dressed) throw new Error(`dress: '${name}' has no rigged body to dress`);
+    return o;
+  }
   /** Pose every actor at time t seconds (deterministic: same t → same pose). The viewer calls it per shot frame. */
   animate(t) { for (const a of this.actors) this._pose(a, t); }
+  /**
+   * Walk pacing. A path much slower than the clip's own travel speed would play the steps in slow motion with sliding
+   * feet; instead the figure walks at a natural pace and keeps going for the whole shot: round and round a closed
+   * path, back and forth along an open one (a short turn on the spot at each end). Otherwise the clip plays at
+   * speed / natural within 0.5–1.25×; a closed path is still walked round and round, an open one ends standing idle.
+   */
+  _pace(a, nat) {
+    a.stroll = null;
+    if (!a.pts || !nat) { a.rate = 1; return; }
+    const loop = a.pts[0].distanceTo(a.pts[a.pts.length - 1]) < 0.3;
+    if (a.idle && a.speed < nat * 0.75) {
+      const walk = nat * 0.85;
+      a.rate = walk / nat; a.stroll = { walk, loop, leg: a.total / walk, turn: loop ? 0 : 0.7 };
+    } else {
+      // faster than ~1.25× its own pace reads as fast-forward (a pusher at walking speed): travel at that pace instead
+      a.speed = Math.min(a.speed, nat * 1.25); a.rate = Math.max(0.5, a.speed / nat);
+      if (loop) a.stroll = { walk: a.speed, loop, leg: a.total / a.speed, turn: 0 };
+    }
+  }
+  /** Facing on segment i at distance d: the segment's direction, eased into the next/previous one within 0.6 m of a
+   *  corner (half-way at the corner itself), so a figure — and what it pushes or carries — turns instead of snapping. */
+  _heading(a, i, d, loop) {
+    const n = a.pts.length - 1, yaw = (k) => { const q0 = a.pts[k - 1], q1 = a.pts[k]; return Math.atan2(q1.x - q0.x, q1.z - q0.z); };
+    const mix = (x, y, u) => x + (((y - x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI) * u;
+    const seg = a.lens[i] - a.lens[i - 1], r = Math.min(0.6, seg / 2), toEnd = a.lens[i] - d, fromStart = d - a.lens[i - 1];
+    if (toEnd < r && (i < n || loop)) return mix(yaw(i), yaw(i < n ? i + 1 : 1), 0.5 * (1 - toEnd / r));
+    if (fromStart < r && (i > 1 || loop)) return mix(yaw(i), yaw(i > 1 ? i - 1 : n), 0.5 * (1 - fromStart / r));
+    return yaw(i);
+  }
   _pose(a, t0) {
-    const t = Math.max(0, t0 + a.offset);
-    let moving = true;
+    const t = Math.max(0, t0 + a.offset), s = a.stroll;
+    const tEnd = a.pts && !s ? a.total / a.speed : Infinity;
+    let walkT = t, idleT = 0, wWalk = 1, back = false, turn = 0;   // walk-clip time, idle time, walk weight, direction
     if (a.pts) {
-      let d = a.speed * t; if (d >= a.total) { d = a.total; moving = false; }
+      let d;
+      if (t >= tEnd) { d = a.total; walkT = tEnd; idleT = t - tEnd; wWalk = 0; }
+      else if (s && s.loop) d = (s.walk * t) % a.total;
+      else if (s) {
+        const half = s.leg + s.turn, k = Math.floor(t / half), tau = t - k * half, fade = 0.2;
+        back = k % 2 === 1; walkT = k * s.leg + Math.min(tau, s.leg);
+        const along = Math.min(tau, s.leg) * s.walk; d = back ? a.total - along : along;
+        if (tau >= s.leg) { const u = (tau - s.leg) / s.turn; turn = u * u * (3 - 2 * u); idleT = tau - s.leg; }   // turning on the spot
+        wWalk = Math.max(0, Math.min(1, k ? tau / fade : 1, (s.leg - tau) / fade));
+      } else d = a.speed * t;
       let i = 1; while (i < a.lens.length - 1 && a.lens[i] < d) i++;
       const p0 = a.pts[i - 1], p1 = a.pts[i], f = (d - a.lens[i - 1]) / Math.max(1e-6, a.lens[i] - a.lens[i - 1]);
       a.g.position.lerpVectors(p0, p1, Math.min(1, f));
-      a.g.rotation.y = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+      a.g.rotation.y = this._heading(a, i, d, s?.loop) + (back ? Math.PI : 0) + turn * Math.PI;
     }
-    const tEnd = a.pts ? a.total / a.speed : Infinity;
-    a.act.time = ((moving ? t : tEnd) * a.rate) % a.act.getClip().duration;
-    a.act.weight = moving || !a.idle ? 1 : 0;
-    if (a.idle) { a.idle.weight = moving ? 0 : 1; a.idle.time = moving ? 0 : (t - tEnd) % a.idle.getClip().duration; }
+    if (!a.idle) wWalk = 1;
+    a.act.time = (walkT * a.rate) % a.act.getClip().duration;
+    a.act.weight = wWalk;
+    if (a.idle) { a.idle.weight = 1 - wWalk; a.idle.time = idleT % a.idle.getClip().duration; }
     a.mixer.update(0);
+    if (a.hold) this._hold(a);
   }
 
   /** Light. type: 'point' | 'spot' | 'directional' | 'area'. color as '#rrggbb' or 0xrrggbb; intensity in three units. */
@@ -627,7 +795,7 @@ export class SceneKit {
     if (!allowed.includes(prefix) || !/^[A-Z]+_[a-z0-9_]+$/.test(name)) throw new Error(`bad name '${name}': use ${allowed.join('|')}_snake_case`);
     // A name used again REPLACES the earlier object/light/camera (chat edits redefine objects by name, 10-28);
     // earlier this threw "duplicate name" and the whole block was skipped.
-    if (this.names.has(name)) this._drop(name);
+    if (this.names.has(name)) this._drop(name, true);
     this.names.add(name);
   }
   /**
@@ -706,7 +874,7 @@ export class SceneKit {
     if (!clip) throw new Error(`motion: no motion '${motion}' for '${name}'`);
     a.act.stop(); a.act = a.mixer.clipAction(clip); a.act.play();
     const nat = o.userData.asset ? (/walk/i.test(String(motion)) ? 1.3 : undefined) : SPEED[motion];
-    a.rate = a.pts && nat ? Math.min(1.6, Math.max(0.5, a.speed / nat)) : 1;
+    this._pace(a, nat);
     // remembered so a duplicate (kit.clone → kit.model) gets the same motion
     const motions = this.models.has(motion) ? [...new Set([...(A.motions || []), motion])] : A.motions;
     o.userData.actor = { ...A, motions, action: o.userData.asset ? clip.name : motion, as: as ?? (o.userData.asset ? undefined : motion) };
@@ -799,14 +967,20 @@ export class SceneKit {
   }
   /** Remove a committed object, light or camera by name (chat edits: "remove the second cage"). No-op if absent. */
   remove(name) { if (this.names.has(name)) this._drop(name); }
-  _drop(name) {
+  _drop(name, replace = false) {
     const o = this.root.getObjectByName(name);
     if (o) {
       if (o.userData.kind === 'object') { this.stats.objects--; this.stats.meshes -= o.userData.meshes || 0; this.stats.triangles -= o.userData.triangles || 0; }
       else if (o.userData.kind === 'light') { this.stats.lights--; if (o.target) this.root.remove(o.target); }
+      const a = this.actors.find((x) => x.g === o || x.g.parent === o), worn = [];
+      o.traverse((c) => { if (c !== o && c.userData.wornBy) worn.push(c); });
       o.removeFromParent();
-      this.actors = this.actors.filter(a => a.g !== o && a.g.parent !== o);
-      o.traverse((c) => { if (c !== o && c.userData.wornBy) this.names.delete(c.name); });   // its costume goes with it
+      this.actors = this.actors.filter(x => x !== a);
+      // Re-created by name (a chat change of its path or action): what it wears and carries waits, exactly where it sat
+      // on its bone or body, for the new figure. Removed: it goes with the figure.
+      if (replace && a && worn.length) this._rewear.set(name, { hold: !!a.hold, items: worn.map((c) => ({ c, bone: c.parent?.isBone ? c.parent.name : null,
+        pos: c.position.clone(), quat: c.quaternion.clone(), scale: c.scale.clone() })) });
+      else for (const c of worn) this.names.delete(c.name);
     }
     const ci = this.cameras.findIndex(c => c.name === name);
     if (ci >= 0) { this.cameras.splice(ci, 1); this.stats.cameras--; }

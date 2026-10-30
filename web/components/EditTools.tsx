@@ -183,7 +183,7 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
   const selectMany = async (names: string[]) => setSel((await bridge?.selectMany(names)) ?? null);
   /** Esc: drop the selection and go back to Orbit (Esc leaves the current tool / camera). */
   const escapeRef = useRef(async () => {});
-  escapeRef.current = async () => { optsRef.current.onEscape?.(); await select(null); await setMode(null); setList(null); };
+  escapeRef.current = async () => { optsRef.current.onEscape?.(); await select(null); await setMode(null); setList(null); setLib(null); setPacksView(null); };
   const escape = () => { void escapeRef.current(); };
   const unique = (base: string, taken: Set<string>) => { let i = 1; while (taken.has(`${base}_${i}`)) i++; return `${base}_${i}`; };
   async function taken() { const o = (await bridge?.objects()) ?? []; return new Set(o.map((x) => x.name)); }
@@ -283,11 +283,11 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
       {lib && <div className="lib-panel" role="dialog" aria-label="Model library">
         <div className="lib-head">
           <input type="search" placeholder="Search models, e.g. barrel, lantern, car" defaultValue={lib.q} autoFocus
-            onKeyDown={(e) => { if (e.key === "Enter") searchLib((e.target as HTMLInputElement).value); }} />
+            onKeyDown={(e) => { if (e.key === "Enter") searchLib((e.target as HTMLInputElement).value); if (e.key === "Escape") { setLib(null); setPacksView(null); } }} />
           <button className={`pill ${packsView ? "on" : ""}`} onClick={() => (packsView ? setPacksView(null) : openPacks())}>Packs</button>
           <label className="pill" title="Your own model or character: .glb, or .fbx as downloaded from Mixamo. A motion file (without skin) goes to the selected person.">Import GLB / FBX<input type="file" accept=".glb,.fbx,model/gltf-binary" hidden
             onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) importModel(f); }} /></label>
-          <button className="pill" aria-label="Close the library" onClick={() => setLib(null)}>×</button>
+          <button className="pill" onClick={() => { setLib(null); setPacksView(null); }}>Close</button>
         </div>
         {importing && <p className="note">{importing}</p>}
         {packsView && <PacksPanel v={packsView} act={packAction} api={packsApi} />}
@@ -335,8 +335,8 @@ function PacksPanel({ v, act, api }: { v: { packs: PackRow[]; known: KnownPack[]
         <label title="Let the builder place these models by itself"><input type="checkbox" checked={p.builder} onChange={(e) => act("Saving", () => api("PATCH", { id: p.id, builder: e.target.checked }))} /> Builder</label>
         {p.kind !== "samples" && <button className="pill" onClick={() => act("Removing", () => api("DELETE", undefined, `?id=${encodeURIComponent(p.id)}`))}>Remove</button>}
       </div>)}
-      <h4>Well-known packs</h4>
-      {v.known.map((k) => <div key={k.id} className="pack-row">
+      {v.known.some((k) => !installed.has(k.id)) && <h4>Well-known packs</h4>}
+      {v.known.filter((k) => !installed.has(k.id)).map((k) => <div key={k.id} className="pack-row">
         <div><b>{k.name}</b><small>{k.licence}, {k.size}; {k.how}</small></div>
         {installed.has(k.id) ? <small>Added</small> : k.id === "polyhaven"
           ? <button className="pill" onClick={() => act(`Adding ${k.name}`, () => api("POST", { kind: "known", id: k.id }))}>Add</button>

@@ -121,6 +121,18 @@ async function fileToDataUrl(f: Blob, max = 1536): Promise<string> {
 }
 const blobToDataUrl = (b: Blob) => new Promise<string>((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(b); });
 
+/** A short scene title from a prompt (or a title saved as the prompt's first 60 characters): the first clause, cut at a
+ *  word, never ending on "a", "for" or ":"; "…" when the sentence goes on. */
+function titleFrom(text: string, max = 60): string {
+  const src = text.trim(); if (src.endsWith("…")) return src;
+  // a clause ends at . ! ? or at ": " / "; " (not inside 9:16); a saved title of exactly max characters was cut
+  let t = src.split(/(?<=[.!?])\s|[:;]\s|\n/)[0].trim(), cut = t.length < src.length || src.length === max;
+  if (t.length > max) { t = t.slice(0, max + 1).replace(/\s+\S*$/, ""); cut = true; }
+  for (let prev = ""; prev !== t;) { prev = t; t = t.replace(/[\s,–—-]+(a|an|the|of|for|with|and|in|on|at|to|from|by|into)$/i, "").replace(/[\s,:;–—-]+$/, ""); }
+  if (!t) return src.slice(0, max);
+  return cut && !/[.!?]$/.test(t) && t.length >= max - 12 ? `${t}…` : t;
+}
+
 export default function Studio() {
   // ---------- shared ----------
   const [view, setView] = useState<"home" | "studio">("home");
@@ -171,6 +183,7 @@ export default function Studio() {
   const [scene, setScene] = useState<ViewerResult | null>(null);
   const [built, setBuilt] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [openMsgs, setOpenMsgs] = useState<Set<number>>(new Set());   // long user messages opened in full
   const [input, setInput] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -341,7 +354,7 @@ export default function Studio() {
   function startFromPrompt() {
     const text = homePrompt.trim(); if (!text) return;
     const r = refs;
-    openStudio((a) => { a.push({ kind: "user", text, ...(r.length ? { refs: r.map((x) => x.url) } : {}) }); setPrompt(text); setTitle(text.slice(0, 60)); a.direct(text, undefined, r); });
+    openStudio((a) => { a.push({ kind: "user", text, ...(r.length ? { refs: r.map((x) => x.url) } : {}) }); setPrompt(text); setTitle(titleFrom(text)); a.direct(text, undefined, r); });
     setHomePrompt("");
   }
   function openExample(ex: (typeof EXAMPLES)[number]) {
@@ -357,7 +370,7 @@ export default function Studio() {
     openStudio(async () => {
       const s = await api<{ id: string; title: string; prompt: string; brief: Ready | null; versions: Version[]; head: number; chat: Msg[]; takes: Take[]; aspect?: Aspect; spend?: Spend; refs?: RefPic[]; shot?: { cam: string | null; recipe: Seg[] } }>(`/api/scenes/${id}`);
       setRefs((s.refs ?? []).map((r) => ({ url: r.url, from: "saved", ...(r.label ? { label: r.label } : {}) }))); setRefNote(null);
-      setSceneId(s.id); setTitle(s.title); setAspect(s.aspect ?? "16:9"); setSpend(s.spend ?? NO_SPEND); setPrompt(s.prompt); setBrief(s.brief); setVersions(s.versions); setHead(s.head);
+      setSceneId(s.id); setTitle(titleFrom(s.title)); setAspect(s.aspect ?? "16:9"); setSpend(s.spend ?? NO_SPEND); setPrompt(s.prompt); setBrief(s.brief); setVersions(s.versions); setHead(s.head);
       const opened = "Scene opened. Carry on where you left off.";   // once, not once per reopen
       setMsgs([...((s.chat || []) as Msg[]).filter((m) => !(m.kind === "note" && "text" in m && m.text === opened)), { kind: "note", text: opened }]); setTakes(s.takes || []);
       setReloads((n) => n + 1); const r = await bridge.current!.load(s.versions[s.head]?.code ?? ""); setScene(r); setBuilt(true);
@@ -399,7 +412,7 @@ export default function Studio() {
     // theirs, and a saved example has none); only an empty studio starts a new set.
     if (built && chatMode === "ask") { push({ kind: "confirm", request: text }); return; }
     if (built) await change(text);
-    else if (!brief) { setPrompt(text); setTitle(text.slice(0, 60)); await direct(text); }
+    else if (!brief) { setPrompt(text); setTitle(titleFrom(text)); await direct(text); }
     // Plan ready, set not built yet (concept step): the text revises the plan, then a new concept is shown.
     else { const p = `${prompt}\n${text}`; setPrompt(p); await direct(p); }
   }
@@ -896,7 +909,7 @@ export default function Studio() {
               <div key={s.id} className="card-wrap">
                 <button className="card" onClick={() => openSaved(s.id)}>
                   <div className="pic"><img src={`/api/scenes/${s.id}?thumb=1`} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} /></div>
-                  <div className="meta">{s.title}<small>{new Date(s.updated).toLocaleString()}</small></div></button>
+                  <div className="meta">{titleFrom(s.title)}<small>{new Date(s.updated).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</small></div></button>
                 <span className="card-acts">
                   <button className="ghost" aria-label={`Rename ${s.title}`} onClick={() => { const t = window.prompt("New name", s.title); if (t && t.trim()) renameScene(s.id, t); }}>Rename</button>
                   <button className="ghost" aria-label={`Delete ${s.title}`} onClick={() => { if (window.confirm(`Delete "${s.title}"? It moves to the trash folder.`)) deleteScene(s.id); }}>Delete</button>
@@ -938,8 +951,9 @@ export default function Studio() {
         <aside className="panel" aria-label="Chat">
           <div className="msgs">
             {msgs.map((m, i) => {
-              if (m.kind === "user") return <div key={i} className="msg user">{m.text}{m.ref && <img src={m.ref} alt="Reference" />}
-                {m.refs && <span className="refrow">{m.refs.map((u, k) => <img key={k} src={u} alt={`Reference ${k + 1}`} />)}</span>}</div>;
+              if (m.kind === "user") { const folded = m.text.length > 280 && !openMsgs.has(i); return <div key={i} className={`msg user${folded ? " folded" : ""}`}
+                title={folded ? "Show all" : undefined} onClick={folded ? () => setOpenMsgs((o) => new Set(o).add(i)) : undefined}>{folded ? <span className="clamp">{m.text}</span> : m.text}{m.ref && <img src={m.ref} alt="Reference" />}
+                {m.refs && <span className="refrow">{m.refs.map((u, k) => <img key={k} src={u} alt={`Reference ${k + 1}`} />)}</span>}</div>; }
               if (m.kind === "error") return <div key={i} className="msg bot error" role="alert">{m.text}</div>;
               if (m.kind === "note") return <div key={i} className="msg bot">{m.text}{m.detail && <ul>{m.detail.map((d) => <li key={d}>{d}</li>)}</ul>}</div>;
               if (m.kind === "questions") return (
@@ -1012,6 +1026,7 @@ export default function Studio() {
               <div className="cams">{camsInOrder(scene?.cameras ?? []).map((c) => (
                 <button key={c} className="cam" aria-pressed={cam === c} onClick={() => pickCam(c)}>
                   {thumbs[c] ? <img src={thumbs[c]} alt="" /> : <div className="ph" />}<span>{camLabel(c)}</span></button>))}</div>
+              <div className="shotctl"><div className="group">
               <label className="pill" title="Camera move">{label(recipe[sel]?.move ?? "dolly-in")}
                 <select aria-label="Camera move" value={recipe[sel]?.move} onChange={(e) => setRecipe(recipe.map((r, i) => (i === sel ? { ...r, move: e.target.value } : r)))}>
                   {GROUPS.map((g) => <optgroup key={g.name} label={g.name}>{g.moves.map((m) => <option key={m} value={m}>{label(m)}</option>)}</optgroup>)}</select></label>
@@ -1025,12 +1040,12 @@ export default function Studio() {
               {aspectChip(takes.length > 0)}
               <button className={`pill ${fps48On ? "on" : ""}`} aria-pressed={fps48On} onClick={() => setFps48User(!fps48On)}
                 title={`Also make a 48 fps copy (the 24 fps video is kept)${fps48Auto ? ": on by itself for this fast move" : ""}`}>48 fps</button>
-              <span className="grow" />
+              </div><div className="group outs">
               <button className="ghost" disabled={!cam && !showing} onClick={downloadStill} title={showing ? "The photoreal first frame of this take (PNG)" : "A picture of this frame of the set"}>Still</button>
               <button className="ghost" disabled={!scene} title="3D set with materials and textures (Blender, Unreal, Unity); Shift-click for geometry only" onClick={(e) => downloadGLB(e.shiftKey ? "clay" : "lit")}>GLB</button>
               {showing && <a className="ghost" href={showing.take.video} download>Video</a>}
               {showing?.take.video48 && <a className="ghost" href={showing.take.video48} download title={showing.take.by48 && `Made with ${showing.take.by48}`}>48 fps</a>}
-              <button className="action" disabled={!built || !cam || total > MAX_SECONDS || !!busy} onClick={requestRender} title={total > 15 ? "Longer than 15 s: rendered in parts and joined" : undefined}>Render shot</button>
+              <button className="action" disabled={!built || !cam || total > MAX_SECONDS || !!busy} onClick={requestRender} title={total > 15 ? "Longer than 15 s: rendered in parts and joined" : undefined}>Render shot</button></div></div>
               {approveOpen && !busy && (() => { const e = renderEstimate(); return (
                 <div className="approve" role="dialog" aria-label="Approve render">
                   <div className="msghead">Render this shot?</div>
@@ -1064,7 +1079,7 @@ export default function Studio() {
                 <button className="ghost" disabled={!cam || !!busy} onClick={addKey}>{Icon.plus}Add from view</button>
                 {keys.length > 0 && <button className="ghost" disabled={!!busy} onClick={() => setKeys([], `Clear the path of ${camLabel(segCam(sel)!)}`, true)}>Clear</button>}</span>}
               <span className="time">{playhead !== null ? `${(playhead * total).toFixed(1)} s / ` : park !== null ? `${park.toFixed(1)} s / ` : ""}{total} s of {MAX_SECONDS}
-                {recipe.length > 1 && <button className="x" style={{ background: "none", border: 0, color: "var(--muted)", marginLeft: 8 }} onClick={() => { setRecipe(recipe.filter((_, i) => i !== sel)); setSel(0); }}>Remove</button>}</span>
+                {recipe.length > 1 && <button className="x" style={{ background: "none", border: 0, color: "var(--muted)", marginLeft: 8 }} onClick={() => { setRecipe(recipe.filter((_, i) => i !== sel)); setSel(0); }}>Remove move</button>}</span>
             </div>
           </div>
 

@@ -9,15 +9,15 @@
  */
 // Film-language phrases for camera-moves.js presets (common film terms).
 export const MOVE_PHRASE = {
-  'static-shot': 'a locked-off static shot', 'path': 'the camera glides smoothly along a planned path', 'dolly-in': 'the camera dollies slowly in',
-  'dolly-out': 'the camera dollies slowly back', 'slow-zoom-in': 'a slow zoom in', 'slow-zoom-out': 'a slow zoom out',
+  'static-shot': 'a locked-off static shot', 'path': 'the camera glides smoothly along a planned path', 'dolly-in': 'the camera dollies in',
+  'dolly-out': 'the camera dollies back', 'slow-zoom-in': 'a slow zoom in', 'slow-zoom-out': 'a slow zoom out',
   'crush-zoom': 'a sudden crash zoom in', 'dolly-zoom': 'a vertigo dolly-zoom', 'truck-left': 'the camera trucks left',
-  'truck-right': 'the camera trucks right', 'slider-left': 'a gentle slider move left', 'slider-right': 'a gentle slider move right',
+  'truck-right': 'the camera trucks right', 'slider-left': 'a slider move left', 'slider-right': 'a slider move right',
   'side-tracking': 'a side-tracking shot', 'tracking': 'the camera tracks forward', 'pedestal-up': 'the camera rises on a pedestal',
   'pedestal-down': 'the camera lowers on a pedestal', 'crane-up': 'a crane shot rising up', 'crane-down': 'a crane shot descending',
   'tilt-up': 'the camera tilts up', 'tilt-down': 'the camera tilts down', 'pan-left': 'the camera pans left',
-  'pan-right': 'the camera pans right', 'whip-pan': 'a fast whip pan', 'arc-left': 'the camera arcs slowly to the left',
-  'arc-right': 'the camera arcs slowly to the right', 'drone-orbit': 'a drone orbit', 'bullet-time': 'a bullet-time orbit',
+  'pan-right': 'the camera pans right', 'whip-pan': 'a fast whip pan', 'arc-left': 'the camera arcs to the left',
+  'arc-right': 'the camera arcs to the right', 'drone-orbit': 'a drone orbit', 'bullet-time': 'a bullet-time orbit',
   'robot-arm': 'a precise robotic-arm camera move', 'aerial-pullback': 'an aerial pull-back', 'helicopter-shot': 'a helicopter shot',
   'handheld': 'handheld camera', 'pov': 'a first-person POV walk', 'snorricam': 'a snorricam shot', 'rack-focus': 'a rack focus',
 };
@@ -63,9 +63,9 @@ function shotSize(cam) {
     : /overhead|top|bird|aerial/.test(w) ? 'an overhead shot' : /low/.test(w) ? 'a low-angle shot' : 'a new angle';
 }
 /**
- * The camera sentence. Recipe "dolly-in:4+arc-left:6:2.5" → "The camera dollies slowly in, then the camera arcs …".
+ * The camera sentence. Recipe "dolly-in:4+arc-left:6:2.5" → "The camera dollies in, then the camera arcs …".
  * Camera cuts ("…+arc-left:2@CAM_closeup", opts.cuts = {segment index: {cam, visible}} from the viewer) read as shots in
- * order: "The camera dollies slowly in; cut to a close-up of the bar counter as the camera arcs slowly to the left".
+ * order: "The camera dollies in; cut to a close-up of the bar counter as the camera arcs to the left".
  * opts.span = [first, last] recipe segment a long-shot part covers (default: all).
  */
 export function moveSentence(move, opts = {}) {
