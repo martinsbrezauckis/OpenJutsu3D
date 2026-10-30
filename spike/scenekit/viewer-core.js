@@ -78,7 +78,7 @@ export async function createViewer({ container = document.body, width = 1280, he
   const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0d0f12);
   const uiLayer = new THREE.Group(); uiLayer.name = 'UI'; scene.add(uiLayer);
   // Light and camera icons in the live view (never in shots or exports: uiLayer only draws in the orbit view). A click
-  // on an icon selects that light/camera (Higgsfield shows them in its viewport; ours were only in the Objects list).
+  // on an icon selects that light/camera (they were only in the Objects list before).
   // Drawn in their own pass AFTER the effects (renderWith): inside the scene the wet-floor reflections (SSR) mirrored them.
   const markerScene = new THREE.Scene(), markers = new THREE.Group(); markers.name = 'markers'; markerScene.add(markers);
   const iconTex = new Map();
@@ -293,17 +293,25 @@ export async function createViewer({ container = document.body, width = 1280, he
   }
 
   // ---- Sky for exteriors (2026-10-18: outdoor sets showed a black void) ----
-  // Exterior test: from the first camera (or the overview), cast 48 rays into the upper hemisphere; if most escape the
-  // set, it is outdoors. Time of day from describe(). The sky also becomes the reflection environment outdoors.
+  // Exterior test: from every camera (or the overview), cast 48 rays into the upper hemisphere; if most escape the
+  // set, it is outdoors. The MEDIAN over the cameras decides: one camera standing in an open doorway (the 10-29 hotel
+  // lobby's entrance view, 42 % of its rays out through the door) made a closed room "outdoors" — day sky + white
+  // haze washed the whole set out. Time of day from describe(). The sky also becomes the reflection environment outdoors.
   function detectSky() {
-    const cam0 = kit.cameras[0] || (() => { const c = new THREE.PerspectiveCamera(); c.position.copy(box.getCenter(new THREE.Vector3())).add(new THREE.Vector3(0, 2, 0)); return c; })();
+    const cams = kit.cameras.length ? kit.cameras : [(() => { const c = new THREE.PerspectiveCamera(); c.position.copy(box.getCenter(new THREE.Vector3())).add(new THREE.Vector3(0, 2, 0)); return c; })()];
     const meshes = []; kit.root.traverse(o => { if (o.isMesh) meshes.push(o); });
-    const rc = new THREE.Raycaster(); let escaped = 0; const N = 48;
-    for (let i = 0; i < N; i++) {
-      const az = (i / N) * Math.PI * 2 * 3.7, el = 0.25 + 0.65 * ((i * 0.618) % 1);   // spread over the upper hemisphere
-      rc.set(cam0.position, new THREE.Vector3(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)));
-      rc.far = 2000; if (!rc.intersectObjects(meshes, false).length) escaped++;
-    }
+    const rc = new THREE.Raycaster(), N = 48;
+    const out = (p) => {
+      let n = 0;
+      for (let i = 0; i < N; i++) {
+        const az = (i / N) * Math.PI * 2 * 3.7, el = 0.25 + 0.65 * ((i * 0.618) % 1);   // spread over the upper hemisphere
+        rc.set(p, new THREE.Vector3(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)));
+        rc.far = 2000; if (!rc.intersectObjects(meshes, false).length) n++;
+      }
+      return n / N;
+    };
+    const fr = cams.map((c) => out(c.position)).sort((a, b) => a - b), h = fr.length >> 1;
+    const escaped = (fr.length % 2 ? fr[h] : (fr[h - 1] + fr[h]) / 2) * N;
     // Time of day from the LIGHTING description first (other fields describe materials/palette: Gemini's
     // "dark weathered oak" once turned a golden-hour city into night, 10-18); whole meta only as a fallback.
     // A bare "dark" no longer means night. Golden/sunset is checked before night ("sunset, lanterns, moonrise").

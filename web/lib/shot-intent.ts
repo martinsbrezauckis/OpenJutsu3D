@@ -1,7 +1,6 @@
 /**
  * shot-intent.ts — read the shot a person asks for in plain words ("an 8 second 360-degree orbit", "slow dolly in
- * for 5 s, then crane up", "film it") without a model call: Higgsfield takes the camera move and duration from the
- * prompt and renders from the chat, so the studio pre-fills the shot bar from the same words (audit 10-29).
+ * for 5 s, then crane up", "film it") without a model call, so the studio pre-fills the shot bar from the same words (audit 10-29).
  * Pure function, shared by the client (home prompt + chat) and tests. Returns null when no camera words are found.
  * Camera cuts (when the set's camera names are given): "dolly in on the main camera for 4 s, then cut to the close-up
  * for 3 s" → dolly-in:4@CAM_main + static-shot:3@CAM_closeup. "cut/switch to the X" names the camera of the next move
@@ -21,8 +20,10 @@ const PHRASES: [RegExp, string][] = [
   [/\bdolly[- ]?(out|back)\b|\bpull[- ]?(back|out)\b(?! aerial)|\bmove[sd]? (back|away)\b/i, "dolly-out"],
   [/\bslow zoom[- ]?in\b|\bzoom(s|ing)?[- ]?in\b/i, "slow-zoom-in"],
   [/\bslow zoom[- ]?out\b|\bzoom(s|ing)?[- ]?out\b/i, "slow-zoom-out"],
-  [/\bcrane[- ]?up\b|\b(rise|rises|rising|lift(s|ing)?)\b.*\b(above|over|up)\b|\bboom up\b/i, "crane-up"],
-  [/\bcrane[- ]?down\b|\b(descend(s|ing)?|lower(s|ing)?)\b|\bboom down\b/i, "crane-down"],
+  // rise / lift / lower / descend are camera words only with the camera as subject or object: "lower the daylight",
+  // "a birdcage lift … up the staircase" or "she descends the stairs" are about the set (10-29 hotel demo)
+  [/\bcrane[- ]?up\b|\b(camera|view|we)\s+(slowly\s+|gently\s+)?(rises|rising|lifts|lifting)\b|\b(raise|lift)\s+the\s+camera\b|\bboom up\b/i, "crane-up"],
+  [/\bcrane[- ]?down\b|\b(camera|view|we)\s+(slowly\s+|gently\s+)?(descends?|descending|lowers|lowering)\b|\blower\s+the\s+camera\b|\bboom down\b/i, "crane-down"],
   [/\bpedestal[- ]?up\b/i, "pedestal-up"], [/\bpedestal[- ]?down\b/i, "pedestal-down"],
   [/\btilt[- ]?up\b/i, "tilt-up"], [/\btilt[- ]?down\b/i, "tilt-down"],
   [/\bwhip[- ]?pan\b/i, "whip-pan"], [/\bpan[- ]?left\b/i, "pan-left"], [/\bpan[- ]?right\b/i, "pan-right"],

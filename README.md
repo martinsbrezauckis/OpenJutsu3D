@@ -1,10 +1,11 @@
-# Open 3D Jutsu
+# OpenJutsu
 
 Describe a place. It gets planned, built as a real 3D set, filmed with a camera move you pick, and rendered as a
 photoreal video shot that moves exactly like the 3D layout.
 
-An open rebuild of the *3D set → camera move → photoreal shot* workflow, made for the Comfy
-**Open Source Higgsfield** hackathon (#OpenSourceHiggsfield).
+An open alternative to Higgsfield's 3D Jutsu: the *3D set → camera move → photoreal shot* workflow, built for the
+Comfy **Open Source Higgsfield** challenge (#OpenSourceHiggsfield). An independent project, not affiliated with
+Higgsfield, and separate from Comfy's own `comfy-openjutsu` starter app.
 
 ## How it works
 
@@ -62,7 +63,7 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
   builder also places matching models by itself.
 - Scene properties: exposure, light strength, background colour.
 - Undo / redo and full version history (editing an older version restores it as the newest — nothing is lost);
-  every scene is saved in **My scenes**; Share saves a scene file that anyone can open in Open 3D Jutsu.
+  every scene is saved in **My scenes**; Share saves a scene file that anyone can open in OpenJutsu.
 - Self-repair: builder code that fails to run is sent back once with the exact error; anything still missing is said
   in the chat.
 - 48 fps for fast camera moves: the shot bar's **48 fps** pill turns on by itself when the planned camera path moves

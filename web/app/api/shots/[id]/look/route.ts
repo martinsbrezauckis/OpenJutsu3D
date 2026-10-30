@@ -5,6 +5,7 @@ import { lookPrompt, lookStill } from "@/lib/pipeline";
 import { segmentFrame, shotDir } from "@/lib/render";
 import { choose } from "@/lib/models";
 import { fail, ok, readRefs } from "@/lib/http";
+import type { Ref } from "@/lib/refs";
 import { metered } from "@/lib/cost";
 export const runtime = "nodejs";
 export const maxDuration = 1800;
@@ -14,7 +15,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     const { id } = await ctx.params; const d = shotDir(id); const { prompt, use, size, format, seg, start, prevStart, cut, refs: rawRefs } = await req.json().catch(() => ({}));
     if (typeof prompt !== "string" || !prompt.trim()) return fail(new Error("no prompt"), 400);
-    let refs; try { refs = readRefs(rawRefs); } catch (e) { return fail(e, 400); }
+    let refs: Ref[]; try { refs = readRefs(rawRefs); } catch (e) { return fail(e, 400); }
     // Long shots: segment `seg` starts at frame `start`; its style reference is the previous segment's render at that moment.
     const k = Number.isInteger(seg) && seg > 0 && seg < 100 ? seg : 0, f = k ? Math.max(0, Math.min(3000, Number(start) || 0)) : 0;
     const lit = new Uint8Array(await readFile(join(d, "lit", `f${String(f).padStart(5, "0")}.jpg`)));
@@ -22,6 +23,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     // frame before it, the old camera's last moment, as the reference for people and look.
     const afterCut = Boolean(k && cut === true);
     const styleRef = k ? { bytes: await segmentFrame(id, k - 1, Math.max(0, f - (Number(prevStart) || 0) - (afterCut ? 1 : 0))), type: "image/png" } : undefined;
+    // Identity anchor: every later part also gets part 0's look still as the first appearance reference, so people,
+    // costumes and colours stay the same across cuts (one look per cut re-invented the person each time, 10-29 hotel).
+    if (k) {
+      const anchor = await readFile(join(d, "look_s0.png")).catch(() => null);
+      if (anchor) refs = [{ bytes: new Uint8Array(anchor), type: "image/png", label: "the opening shot of this same scene" }, ...refs];
+    }
     const u = choose("look", use);
     const sz = ["1536x1024", "1024x1536", "1024x1024"].includes(size) ? size : "1536x1024";
     const fmt = /^[0-9]{1,2}:[0-9]{1,2} [a-z]{3,10}$/.test(String(format)) ? String(format) : undefined;

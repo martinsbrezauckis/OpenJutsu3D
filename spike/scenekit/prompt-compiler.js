@@ -7,7 +7,7 @@
  * atmosphere. → ~60–90 words: setting → biggest visible things with materials → surfaces → lighting → atmosphere →
  * camera move in film language → photoreal suffix. Deterministic.
  */
-// Film-language phrases for camera-moves.js presets (same names as Higgsfield Cinema Studio's enum).
+// Film-language phrases for camera-moves.js presets (common film terms).
 export const MOVE_PHRASE = {
   'static-shot': 'a locked-off static shot', 'path': 'the camera glides smoothly along a planned path', 'dolly-in': 'the camera dollies slowly in',
   'dolly-out': 'the camera dollies slowly back', 'slow-zoom-in': 'a slow zoom in', 'slow-zoom-out': 'a slow zoom out',

@@ -1,12 +1,12 @@
 /**
  * camera-moves.js — Cinema Studio's 33 camera-movement presets as exact 3D camera paths.
  *
- * Role: Higgsfield Cinema Studio 4.0 exposes `camera_movement` as 33 words that an LLM "director" writes into a
- * prompt (research/higgsfield_api_capabilities.md). In a real 3D set every move is a deterministic camera path
+ * Role: video tools describe camera motion as a small vocabulary of film terms that an LLM "director" writes into a
+ * prompt. In a real 3D set every move is a deterministic camera path
  * instead, so a Layout-To-Render playblast carries the move exactly.
  *
  * API: cameraAt(move, start, t, opts) -> { pos:[x,y,z], lookAt:[x,y,z], fov, roll }
- *   move   one of MOVES (kebab-case names identical to Higgsfield's enum)
+ *   move   one of MOVES (kebab-case film terms)
  *   start  { pos, lookAt, fov }  — the shot camera at t = 0 (usually a scene CAM_*)
  *   t      0..1 normalised shot time (eased inside where a real rig would ease)
  *   opts   { amount = 1 }  scales the move's travel (1 = a natural, readable move for the subject distance)

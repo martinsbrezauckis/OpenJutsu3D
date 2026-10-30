@@ -1,7 +1,7 @@
 /**
  * router-video.ts — render a shot with a hosted video model through Comfy Router (server only), as an alternative to
  * the local LTX-2.5 Layout-To-Render graph (lib/render.ts).
- *   seedance-2.5  byteplus/dreamina-seedance-2-5-260628 — the model Higgsfield 3D Jutsu exports to
+ *   seedance-2.5  byteplus/dreamina-seedance-2-5-260628 — a strong 3D-guided video model
  *   minimax-h3    minimax/minimax-h3
  * Both take the shot's grey layout video as a `reference_video` and the look still as a `reference_image`. They follow
  * the layout and camera LOOSELY (a reference, not frame-exact conditioning like L2R) — the UI says so.
@@ -25,7 +25,7 @@ export const ROUTER_VIDEO: Record<RouterVideoModel, { id: string; label: string;
 function cloudClient(): Comfy {
   const saved = process.env.COMFY_BASE_URL;
   delete process.env.COMFY_BASE_URL;
-  try { return new Comfy({ apiKey: process.env.COMFY_API_KEY?.trim() || undefined, clientInfo: "open-3d-jutsu" }); }
+  try { return new Comfy({ apiKey: process.env.COMFY_API_KEY?.trim() || undefined, clientInfo: "openjutsu" }); }
   finally { if (saved !== undefined) process.env.COMFY_BASE_URL = saved; }
 }
 

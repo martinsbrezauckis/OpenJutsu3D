@@ -181,7 +181,7 @@ export function useEditTools(bridge: ViewerBridge | null, opts: { enabled: boole
   /** add = Shift / Ctrl / Cmd-click: toggle an object in or out of the selection. */
   const select = async (name: string | null, add = false) => setSel((await bridge?.select(name, add)) ?? null);
   const selectMany = async (names: string[]) => setSel((await bridge?.selectMany(names)) ?? null);
-  /** Esc: drop the selection and go back to Orbit (Higgsfield: Esc leaves the current tool / camera). */
+  /** Esc: drop the selection and go back to Orbit (Esc leaves the current tool / camera). */
   const escapeRef = useRef(async () => {});
   escapeRef.current = async () => { optsRef.current.onEscape?.(); await select(null); await setMode(null); setList(null); };
   const escape = () => { void escapeRef.current(); };

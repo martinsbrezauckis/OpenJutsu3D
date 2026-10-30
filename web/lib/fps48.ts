@@ -1,6 +1,6 @@
 /**
  * fps48.ts — when a shot gets a 48 fps copy (pure; client + server + bench).
- * A fast camera move judders at 24 fps; Higgsfield delivers those shots at 48 fps. "Fast" is MEASURED on the shot's
+ * A fast camera move judders at 24 fps; such shots are delivered at 48 fps. "Fast" is MEASURED on the shot's
  * own camera path (the viewer's planShot states, so path keyframes and wall avoidance count), not looked up by move
  * name: whip-pan over 15 s is slow, an arc over 1 s is fast.
  * Measure = image speed: probe points spread over the frame at three depths (half the subject distance, the subject,

@@ -46,7 +46,7 @@ export function parseDirector(text: string): DirectorResult {
   return { status: "ready", brief: d.brief, batches: batches.slice(0, 6), assumptions: d.assumptions ?? [] };
 }
 
-/** How the director treats questions (Higgsfield-style modes): auto = only when the idea is unclear (DIRECTOR_PROMPT.md),
+/** How the director treats questions (modes): auto = only when the idea is unclear (DIRECTOR_PROMPT.md),
  *  ask = always ask 1–3 short questions first, go = never ask, decide and list assumptions. */
 export type AskMode = "auto" | "ask" | "go";
 const MODE_RULE: Record<AskMode, string> = { auto: "",

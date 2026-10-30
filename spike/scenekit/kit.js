@@ -10,7 +10,7 @@
  * runs via `new Function` in the page, which is NOT a sandbox; only run code you have read or that
  * came from your own builder run.
  *
- * Conventions (mirrors the naming observed in Higgsfield 3D Jutsu exports, see research/3d_jutsu.md):
+ * Conventions:
  *   object names are PREFIX_name with PREFIX in ENV|PRP|MACH|CHAR|LGT|CAM; units are metres, +Y up,
  *   the camera's default forward is -Z. Materials are semantic labels (MAT_<label>) — the label text
  *   later feeds the render prompt, colours are only viewport hints.
@@ -87,7 +87,7 @@ function boxProjectUV(g) {
 
 /**
  * An object under construction: parts grouped by material label. On commit, parts with the same
- * material are merged into one mesh named `<object>_<label>` (same layout as the Higgsfield exports).
+ * material are merged into one mesh named `<object>_<label>` (one mesh per object and material).
  */
 class Thing {
   constructor(kit, name) {
@@ -357,6 +357,25 @@ export class SceneKit {
     this.root.add(g); this.stats.objects++; this.stats.meshes += meshes; this.stats.triangles += Math.round(tris);
     this._markBase(g); this.onCommit(g, { name, kind: 'object' });
     return g;
+  }
+  /**
+   * Costume or carried things that move with an animated figure: each committed prop, placed where the figure stands
+   * at the start of its walk, rides on the figure from then on (follows the path, turns with it).
+   *   kit.wear('CHAR_violet_guest', 'PRP_violet_cape_and_mask')
+   * A rigid costume over the mannequin hides its limbs: costumed figures read as moving only when they travel a path.
+   * Worn things leave the top-level object list: selecting one selects the figure, and the figure's box includes them.
+   */
+  wear(name, ...props) {
+    const o = this.root.getObjectByName(name), a = o && this.actors.find((x) => x.g === o || x.g.parent === o);
+    if (!a) throw new Error(`wear: '${name}' is not an animated figure`);
+    this._pose(a, -a.offset); this.root.updateMatrixWorld(true);   // the walk's start, whatever the stagger
+    for (const p of props.flat()) {
+      const w = this.root.getObjectByName(p);
+      if (!w || w.userData.kind !== 'object' || w === o || w.parent !== this.root) throw new Error(`wear: no free object '${p}'`);
+      a.g.attach(w); w.userData.wornBy = name;
+    }
+    this._pose(a, 0);
+    return o;
   }
   /** Pose every actor at time t seconds (deterministic: same t → same pose). The viewer calls it per shot frame. */
   animate(t) { for (const a of this.actors) this._pose(a, t); }
@@ -787,6 +806,7 @@ export class SceneKit {
       else if (o.userData.kind === 'light') { this.stats.lights--; if (o.target) this.root.remove(o.target); }
       o.removeFromParent();
       this.actors = this.actors.filter(a => a.g !== o && a.g.parent !== o);
+      o.traverse((c) => { if (c !== o && c.userData.wornBy) this.names.delete(c.name); });   // its costume goes with it
     }
     const ci = this.cameras.findIndex(c => c.name === name);
     if (ci >= 0) { this.cameras.splice(ci, 1); this.stats.cameras--; }

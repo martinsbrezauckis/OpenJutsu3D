@@ -1,6 +1,6 @@
 "use client";
 /**
- * Studio.tsx — Open 3D Jutsu UI. Visual system = Comfy-Org/comfy-openjutsu; structure = Higgsfield 3D Jutsu.
+ * Studio.tsx — OpenJutsu UI. Visual system = Comfy-Org/comfy-openjutsu (Comfy's reference app for the challenge).
  * Two views:
  *   Home   composer card (prompt + chips: up to 5 reference pictures, model, concept picture) → Build; My scenes (saved sets,
  *          "Create blank scene"); example sets that open instantly.
@@ -77,7 +77,9 @@ const EXAMPLES = [
 type Seg = { move: string; seconds: number; cam?: string };
 const label = (m: string) => (m === "path" ? "Custom path" : m.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()));
 const camLabel = (c: string) => c.replace(/^CAM_/, "").replace(/_/g, " ");
-// Shots up to 60 s (Higgsfield's range); > 15 s render as overlapping LTX segments (lib/render.ts planSegments).
+// Scene files: "openjutsu-scene"; files saved before the rename say "open-3d-jutsu-scene" and still open.
+const SCENE_FORMATS = ["openjutsu-scene", "open-3d-jutsu-scene"];
+// Shots up to 60 s; > 15 s render as overlapping LTX segments (lib/render.ts planSegments).
 const MAX_SECONDS = 60;
 const MAX_PROMPT = 4000;   // the director route refuses longer prompts (api/director)
 const START_SECONDS = [3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 45, 60];
@@ -125,7 +127,7 @@ export default function Studio() {
   const [config, setConfig] = useState<Config | null>(null);
   const [builderUse, setBuilderUse] = useState<Use | null>(null);
   const [conceptOn, setConceptOn] = useState(true);
-  // Chat mode (Higgsfield-style): auto = ask only when unclear, ask = ask before generating, go = never ask, chat = talk, no changes.
+  // Chat mode: auto = ask only when unclear, ask = ask before generating, go = never ask, chat = talk, no changes.
   const [chatMode, setChatMode] = useState<"auto" | "ask" | "go" | "chat">("auto");
   const [aspect, setAspect] = useState<Aspect>("16:9");   // chosen on the home composer, kept per scene
   const [startSeconds, setStartSeconds] = useState(5);   // shot length chosen on the home composer (a length in the prompt wins)
@@ -365,20 +367,20 @@ export default function Studio() {
       if (c) await bridge.current?.view(c);
     });
   }
-  /** Share: the set as a file another Open 3D Jutsu can open (versions, plan, format — no videos, no chat). */
+  /** Share: the set as a file another OpenJutsu can open (versions, plan, format — no videos, no chat). */
   function downloadSceneFile() {
     const { title, prompt, brief, aspect } = meta.current;
-    const file = { format: "open-3d-jutsu-scene", version: 1, title, prompt, brief, aspect, versions, head };
+    const file = { format: "openjutsu-scene", version: 1, title, prompt, brief, aspect, versions, head };
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(file)], { type: "application/json" }));
     a.download = `${(title || "set").replace(/[^\w .-]+/g, "").slice(0, 40) || "set"}.o3j.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-    push({ kind: "note", text: `Saved ${a.download}: open it in Open 3D Jutsu with "Open scene file" on the start page. Models from your own packs travel only as names — the other side needs the same packs.` });
+    push({ kind: "note", text: `Saved ${a.download}: open it in OpenJutsu with "Open scene file" on the start page. Models from your own packs travel only as names — the other side needs the same packs.` });
   }
   async function openSceneFile(f: File) {
     try {
       const s = JSON.parse(await f.text());
-      if (s?.format !== "open-3d-jutsu-scene" || !Array.isArray(s.versions) || !s.versions.length || s.versions.some((v: Version) => typeof v?.code !== "string"))
-        throw new Error("that is not an Open 3D Jutsu scene file");
+      if (!SCENE_FORMATS.includes(s?.format) || !Array.isArray(s.versions) || !s.versions.length || s.versions.some((v: Version) => typeof v?.code !== "string"))
+        throw new Error("that is not an OpenJutsu scene file");
       const { id } = await api<{ id: string }>("/api/scenes", { json: { title: String(s.title || f.name).slice(0, 120), prompt: String(s.prompt || ""),
         brief: s.brief ?? null, aspect: s.aspect, versions: s.versions.map((v: Version) => ({ code: v.code, note: String(v.note || ""), at: String(v.at || "") })),
         head: Math.min(Math.max(0, Number(s.head) || 0), s.versions.length - 1), chat: [], takes: [] } });
@@ -407,7 +409,7 @@ export default function Studio() {
    */
   function shotOnly(text: string) {
     const si = shotIntent(text, MAX_SECONDS, scene?.cameras ?? []);
-    const setWords = /\b(add|remove|delete|replace|change|put|place|paint|colou?r|bigger|smaller|darker|brighter|swap|build|create|more|less)\b|\bmake (it|them|the (?!video|clip|shot|film))/i;
+    const setWords = /\b(add|remove|delete|replace|change|put|place|paint|colou?r|colou?rs|bigger|smaller|darker|brighter|swap|build|create|more|less|lower|raise|reduce|increase|dim|brighten|darken|fix|light|lights|lighting|daylight|exposure|overexposed|underexposed|washe?s? out)\b|\bmake (it|them|the (?!video|clip|shot|film))/i;
     if (!si || setWords.test(text)) return false;
     if (si.recipe.length) { setRecipe(si.recipe); setSel(0); }
     const shot = si.recipe.map((r, i) => `${i && r.cam && r.cam !== (si.recipe[i - 1].cam ?? cam) ? "cut to " : ""}${label(r.move)} ${r.seconds} s${r.cam ? ` (${camLabel(r.cam)})` : ""}`).join(", then ");
@@ -532,7 +534,7 @@ export default function Studio() {
   // A render that failed AFTER its frames were captured (a lost connection to the render server) continues from those
   // frames when Render shot is pressed again for the same shot — a 30 s shot captures for about an hour (10-29).
   const failedRender = useRef<{ key: string; id: string } | null>(null);
-  // ---------- approve before rendering (like Higgsfield's approve panel) ----------
+  // ---------- approve before rendering ----------
   const [approveOpen, setApproveOpen] = useState(false);
   const [alwaysRender, setAlwaysRender] = useState(() => { try { return localStorage.getItem("o3j.alwaysRender") === "1"; } catch { return false; } });
   function requestRender() { if (alwaysRender) void renderShot(); else setApproveOpen(true); }
@@ -820,6 +822,7 @@ export default function Studio() {
       move: (i: number, m: string) => setRecipe((r) => r.map((x, k) => (k === i ? { ...x, move: m } : x))),
       length: (i: number, s: number) => setRecipe((r) => r.map((x, k) => (k === i ? { ...x, seconds: s } : x))),
       addMove: (m = "arc-left", s = 4, c?: string | null) => addMove(m, s, c === undefined ? cam : c),
+      removeMove: (i: number) => { setRecipe((r) => (r.length > 1 ? r.filter((_, k) => k !== i) : r)); setSel(0); },   // the move's × button
       select: (i: number) => setSel(i), preview, render: () => renderShot(), requestRender: () => requestRender(), approveRender: (yes: boolean, always?: boolean) => approveRender(yes, always), resumeRender: (id: string) => renderShot(id), undo: () => goto(head - 1), redo: () => goto(head + 1), version: (h: number) => goto(h),
       mode: (m: "lit" | "clay") => { setMode(m); return bridge.current?.mode(m); },
       showTake: (i: number, m: "final" | "clay" | "side" = "final") => { const tk = takes[i]; if (tk) setShowing({ take: tk, mode: m }); },
@@ -854,8 +857,8 @@ export default function Studio() {
   if (view === "home") return (
     <div>
       <header className="topbar">
-        <span className="brand">Comfy</span><span className="divider" aria-hidden /><span className="title">Open 3D Jutsu</span><span className="badge">BETA</span>
-        <a className="topbar-link" href="https://github.com/martinsbrezauckis/open-3d-jutsu" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
+        <span className="title">OpenJutsu</span><span className="badge">BETA</span>
+        <a className="topbar-link" href="https://github.com/martinsbrezauckis/openjutsu" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
       </header>
       <main className="home">
         <section className="hero">
@@ -918,8 +921,7 @@ export default function Studio() {
   return (
     <div className="studio-app">
       <header className="topbar">
-        <button className="brand" onClick={() => { setView("home"); refreshScenes(); }}>Comfy</button><span className="divider" aria-hidden />
-        <button className="title" onClick={() => { setView("home"); refreshScenes(); }}>Open 3D Jutsu</button><span className="badge">BETA</span>
+        <button className="title" onClick={() => { setView("home"); refreshScenes(); }}>OpenJutsu</button><span className="badge">BETA</span>
         <span className="setname">{title}</span>
         <span className="spacer" />
         <button className="pill" disabled={head <= 0 || !!busy} onClick={() => goto(head - 1)} title={versions[head - 1]?.note}>{Icon.undo}Undo</button>
@@ -1067,7 +1069,7 @@ export default function Studio() {
           {takes.length > 0 && <nav className="takes" aria-label="Takes">{takes.map((t, i) => (
             <button key={t.id} className="take" aria-current={showing?.take.id === t.id} onClick={() => setShowing({ take: t, mode: "final" })}>
               {t.thumb ? <img src={t.thumb} alt="" /> : null}<span><b>Take {i + 1}</b> {t.label}</span></button>))}
-            {/* Past generations as references (Higgsfield): the shown take's photoreal still, or the video frame on screen. */}
+            {/* Past generations as references: the shown take's photoreal still, or the video frame on screen. */}
             {showing && <span className="take-refs">Use as reference:
               <button className="ghost" disabled={refs.length >= MAX_REFS} title="This take's photoreal first frame" onClick={() => refFromUrl(`/api/shots/${showing.take.id}/file/look.png`, `take ${takes.findIndex((t) => t.id === showing.take.id) + 1}`).catch((e) => setRefNote((e as Error).message))}>Still</button>
               <button className="ghost" disabled={refs.length >= MAX_REFS || showing.mode === "clay"} title="The video frame on screen now" onClick={() => refFromFrame().catch((e) => setRefNote((e as Error).message))}>Frame</button></span>}</nav>}

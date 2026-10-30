@@ -1,4 +1,4 @@
-// shot_intent_test.mts — camera move + duration read from plain words (lib/shot-intent.ts): Higgsfield's own example
+// shot_intent_test.mts — camera move + duration read from plain words (lib/shot-intent.ts): a typical user's example
 // prompt ("8 seconds … 360-degree orbit") must pre-fill an 8 s orbit; chains keep their order; "film it" asks for a
 // render. Run: node bench/shot_intent_test.mts (offline; part of `npm test` in web/)
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,6 +17,12 @@ const cases: [string, string | null, boolean?][] = [
   ["arc left around the table for six seconds", "arc-left:6"],
   ["handheld shot following them down the street, half a minute", "handheld:15+tracking:15"],
   ["a 90 second helicopter flyover", "helicopter-shot:60"],
+  // set words that look like camera words (10-29 hotel demo): not a camera move
+  ["Lower the daylight a lot so the pink walls show strong colours", null],
+  ["a brass birdcage lift on each side, a low view looking up the staircase to the chandelier", null],
+  ["a woman descends the staircase", null],
+  ["the camera slowly lowers to the desk for 4 s", "crane-down:4"],
+  ["the camera rises above the rooftops, 6 seconds", "crane-up:6"],
 ];
 let bad = 0;
 for (const [text, want, render] of cases) {

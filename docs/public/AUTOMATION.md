@@ -129,7 +129,7 @@ Run several servers for parallel jobs, each with its own browser: `python3 bench
 
 ## Camera cuts
 
-One shot can cut between cameras (Higgsfield's "three-shot preview"). A shot is a chain of moves, written
+One shot can cut between cameras (a multi-shot preview). A shot is a chain of moves, written
 `move:seconds[@CAM_x]+…`, e.g. `dolly-in:2+arc-left:2@CAM_table+pan-left:2@CAM_barrels`: two seconds of dolly on the shot
 camera, then a cut to `CAM_table` arcing left, then a cut to `CAM_barrels` panning. Moves on the same camera chain
 smoothly; a move on another camera starts at that camera's own pose. A move without `@` uses the shot camera, so shots

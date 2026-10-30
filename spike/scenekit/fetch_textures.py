@@ -19,7 +19,7 @@ OUT = HERE / "assets" / "textures"
 RES = sys.argv[sys.argv.index("--res") + 1] if "--res" in sys.argv else "1k"
 # Poly Haven map keys -> our file names. 'Rough' and 'Metal' may be absent for some assets.
 MAPS = {"Diffuse": "diff", "nor_gl": "nor_gl", "Rough": "rough", "Metal": "metal"}
-UA = {"User-Agent": "open-source-higgsfield-scenekit/0.1 (hackathon research)"}
+UA = {"User-Agent": "openjutsu-scenekit/0.1"}
 
 
 def get_json(url: str):

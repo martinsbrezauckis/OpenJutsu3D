@@ -1,8 +1,7 @@
 /*
- * studio.css — Open 3D Jutsu.
+ * studio.css — OpenJutsu.
  * Visual system from Comfy-Org/comfy-openjutsu (Comfy's own reference app for this challenge): ink/panel/field/line
- * tokens, Inter, ONE Comfy-yellow accent for the main action, 16 px panels, 12 px fields. Structure from Higgsfield
- * 3D Jutsu: a home with one big
+ * tokens, Inter, ONE Comfy-yellow accent for the main action, 16 px panels, 12 px fields. Layout: a home with one big
  * composer card (pill chips: reference, model, length, aspect) and My scenes; a studio with the chat panel, the 3D
  * viewer, a shot bar and a move timeline. The page never scrolls sideways; long lists scroll inside their panel.
  */
@@ -167,7 +166,7 @@ input[type=range] { width: 100%; accent-color: var(--yellow); }
 .shotbar .grow { flex: 1; }
 .thumb { width: 96px; height: 54px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
 
-/* timeline: the camera move with a playhead (Higgsfield "Stage it") */
+/* timeline: the camera move with a playhead */
 .timeline { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; padding: 8px 12px; border-radius: 12px; background: var(--panel); }
 .timeline .play { width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--field); display: grid; place-items: center; }
 .timeline .play svg { width: 14px; height: 14px; fill: var(--text); }

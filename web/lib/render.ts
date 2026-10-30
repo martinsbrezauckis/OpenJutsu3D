@@ -263,7 +263,7 @@ export async function segmentFrame(id: string, k: number, frame: number): Promis
 
 function client() {
   const apiKey = process.env.COMFY_API_KEY?.trim() || undefined;
-  return new Comfy({ apiKey, clientInfo: "open-3d-jutsu" });   // baseUrl from COMFY_BASE_URL (SDK reads it)
+  return new Comfy({ apiKey, clientInfo: "openjutsu" });   // baseUrl from COMFY_BASE_URL (SDK reads it)
 }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
 export const NODE = { clay: "5001", look: "9009", prompt: "5508" } as const;

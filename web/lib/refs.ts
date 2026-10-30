@@ -1,5 +1,5 @@
 /**
- * refs.ts — reference pictures (Higgsfield: "your uploads or past generations"): up to MAX_REFS per request, sent by
+ * refs.ts — reference pictures (your uploads or past generations): up to MAX_REFS per request, sent by
  * the client as PNG/JPEG/WebP data URLs (≤ 8 MB each, bytes must match the declared type), each with an optional
  * short label ("the woman", "her handbag"). They reach the director, concept, build and every render's look still.
  */
