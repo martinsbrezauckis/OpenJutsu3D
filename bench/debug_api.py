@@ -209,9 +209,12 @@ def main():
                 if self.path == "/upload":
                     out, target = (ROOT / "bench" / "out").resolve(), body.get("target", "library")
                     if target not in ("library", "ref"): return self.send(400, {"ok": False, "error": "target: library or ref"})
-                    paths = [pathlib.Path(str(x)).resolve() for x in (body.get("paths") if target == "ref" and isinstance(body.get("paths"), list) else [body.get("path", "")])]
-                    if not paths or any(out not in p.parents or not p.is_file() for p in paths): return self.send(400, {"ok": False, "error": "path must be a file under bench/out"})
-                    return self.send(200, s.upload([str(p) for p in paths] if len(paths) > 1 else str(paths[0]), body.get("wait", 15 if target == "ref" else 180), target))
+                    raw = body.get("paths") if target == "ref" and isinstance(body.get("paths"), list) else [body.get("path", "")]
+                    # Only files under bench/out: resolve first (symlinks, ..), then require the folder prefix.
+                    paths = [os.path.realpath(os.path.join(str(out), str(x))) for x in raw]
+                    if not paths or any(not q.startswith(str(out) + os.sep) for q in paths): return self.send(400, {"ok": False, "error": "path must be a file under bench/out"})
+                    if any(not os.path.isfile(q) for q in paths): return self.send(400, {"ok": False, "error": "path must be a file under bench/out"})
+                    return self.send(200, s.upload(paths if len(paths) > 1 else paths[0], body.get("wait", 15 if target == "ref" else 180), target))
                 self.send(404, {"ok": False, "error": "unknown path"})
             except Exception as e:
                 try: shot = s.shot("error")
