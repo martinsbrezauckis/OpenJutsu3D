@@ -1,6 +1,6 @@
 "use client";
 /**
- * Studio.tsx — OpenJutsu UI. Visual system = Comfy-Org/comfy-openjutsu (Comfy's reference app for the challenge).
+ * Studio.tsx — OpenJutsu3D UI. Visual system = Comfy-Org/comfy-openjutsu (Comfy's reference app for the challenge).
  * Two views:
  *   Home   composer card (prompt + chips: up to 5 reference pictures, model, concept picture) → Build; My scenes (saved sets,
  *          "Create blank scene"); example sets that open instantly.
@@ -380,20 +380,20 @@ export default function Studio() {
       if (c) await bridge.current?.view(c);
     });
   }
-  /** Share: the set as a file another OpenJutsu can open (versions, plan, format — no videos, no chat). */
+  /** Share: the set as a file another OpenJutsu3D can open (versions, plan, format — no videos, no chat). */
   function downloadSceneFile() {
     const { title, prompt, brief, aspect } = meta.current;
     const file = { format: "openjutsu-scene", version: 1, title, prompt, brief, aspect, versions, head };
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(file)], { type: "application/json" }));
     a.download = `${(title || "set").replace(/[^\w .-]+/g, "").slice(0, 40) || "set"}.o3j.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-    push({ kind: "note", text: `Saved ${a.download}: open it in OpenJutsu with "Open scene file" on the start page. Models from your own packs travel only as names — the other side needs the same packs.` });
+    push({ kind: "note", text: `Saved ${a.download}: open it in OpenJutsu3D with "Open scene file" on the start page. Models from your own packs travel only as names — the other side needs the same packs.` });
   }
   async function openSceneFile(f: File) {
     try {
       const s = JSON.parse(await f.text());
       if (!SCENE_FORMATS.includes(s?.format) || !Array.isArray(s.versions) || !s.versions.length || s.versions.some((v: Version) => typeof v?.code !== "string"))
-        throw new Error("that is not an OpenJutsu scene file");
+        throw new Error("that is not an OpenJutsu3D scene file");
       const { id } = await api<{ id: string }>("/api/scenes", { json: { title: String(s.title || f.name).slice(0, 120), prompt: String(s.prompt || ""),
         brief: s.brief ?? null, aspect: s.aspect, versions: s.versions.map((v: Version) => ({ code: v.code, note: String(v.note || ""), at: String(v.at || "") })),
         head: Math.min(Math.max(0, Number(s.head) || 0), s.versions.length - 1), chat: [], takes: [] } });
@@ -872,8 +872,8 @@ export default function Studio() {
   if (view === "home") return (
     <div>
       <header className="topbar">
-        <span className="title">OpenJutsu</span><span className="badge">BETA</span>
-        <a className="topbar-link" href="https://github.com/martinsbrezauckis/openjutsu" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
+        <span className="title">OpenJutsu3D</span><span className="badge">BETA</span>
+        <a className="topbar-link" href="https://github.com/martinsbrezauckis/openjutsu3d" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
       </header>
       <main className="home">
         <section className="hero">
@@ -936,7 +936,7 @@ export default function Studio() {
   return (
     <div className="studio-app">
       <header className="topbar">
-        <button className="title" onClick={() => { setView("home"); refreshScenes(); }}>OpenJutsu</button><span className="badge">BETA</span>
+        <button className="title" onClick={() => { setView("home"); refreshScenes(); }}>OpenJutsu3D</button><span className="badge">BETA</span>
         <span className="setname">{title}</span>
         <span className="spacer" />
         <button className="pill" disabled={head <= 0 || !!busy} onClick={() => goto(head - 1)} title={versions[head - 1]?.note}>{Icon.undo}Undo</button>

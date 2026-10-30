@@ -25,7 +25,7 @@ export const ROUTER_VIDEO: Record<RouterVideoModel, { id: string; label: string;
 function cloudClient(): Comfy {
   const saved = process.env.COMFY_BASE_URL;
   delete process.env.COMFY_BASE_URL;
-  try { return new Comfy({ apiKey: process.env.COMFY_API_KEY?.trim() || undefined, clientInfo: "openjutsu" }); }
+  try { return new Comfy({ apiKey: process.env.COMFY_API_KEY?.trim() || undefined, clientInfo: "openjutsu3d" }); }
   finally { if (saved !== undefined) process.env.COMFY_BASE_URL = saved; }
 }
 

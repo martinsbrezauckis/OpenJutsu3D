@@ -24,7 +24,7 @@ export type Pack = { id: string; name: string; kind: "samples" | "folder" | "lin
 const DIR = () => join(DATA_DIR, "packs");
 const REG = () => join(DIR(), "packs.json");
 const SAMPLES = () => join(process.cwd(), "packs", "samples");
-const UA = { "User-Agent": "openjutsu (asset library)" };
+const UA = { "User-Agent": "openjutsu3d (asset library)" };
 
 /** Packs the user can add with one click (licence shown before adding). */
 export const KNOWN = [

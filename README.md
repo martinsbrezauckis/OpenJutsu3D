@@ -1,4 +1,4 @@
-# OpenJutsu
+# OpenJutsu3D
 
 Describe a place. It gets planned, built as a real 3D set, filmed with a camera move you pick, and rendered as a
 photoreal video shot that moves exactly like the 3D layout.
@@ -66,7 +66,7 @@ photoreal shot ◀── LTX-2.5 Layout-To-Render ◀── look still ◀──
   builder also places matching models by itself.
 - Scene properties: exposure, light strength, background colour.
 - Undo / redo and full version history (editing an older version restores it as the newest — nothing is lost);
-  every scene is saved in **My scenes**; Share saves a scene file that anyone can open in OpenJutsu.
+  every scene is saved in **My scenes**; Share saves a scene file that anyone can open in OpenJutsu3D.
 - Self-repair: builder code that fails to run is sent back once with the exact error; anything still missing is said
   in the chat.
 - 48 fps for fast camera moves: the shot bar's **48 fps** pill turns on by itself when the planned camera path moves

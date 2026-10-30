@@ -5,7 +5,7 @@ import "./studio.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 
 export const metadata = {
-  title: "OpenJutsu",
+  title: "OpenJutsu3D",
   description: "Describe a place, watch it get built in 3D, pick a camera move, get a photoreal shot. Comfy Router + Comfy SDK + LTX-2.5.",
 };
 

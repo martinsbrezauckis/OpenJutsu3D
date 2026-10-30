@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""debug_api.py — automation / debug API for the OpenJutsu web app: every UI action, with a screenshot after each.
+"""debug_api.py — automation / debug API for the OpenJutsu3D web app: every UI action, with a screenshot after each.
 Keeps ONE real browser open on the app (?debug=1) and exposes every UI action over HTTP; each action
 is followed by a numbered screenshot, the app state and any console/page errors.
 

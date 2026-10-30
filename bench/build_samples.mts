@@ -6,7 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url)), out = join(here, "..", "web", "packs", "samples");
 const { gltfToGlb } = await import(join(here, "..", "web", "lib", "gltf-pack.ts"));
-const UA = { "User-Agent": "openjutsu (samples pack build)" };
+const UA = { "User-Agent": "openjutsu3d (samples pack build)" };
 const IDS = process.argv.slice(2).length ? process.argv.slice(2) : ["Barrel_01", "wooden_crate_02", "wooden_lantern_01", "Lantern_01",
   "street_lamp_02", "painted_wooden_chair_01", "WoodenTable_01", "Sofa_01", "Shelf_01", "planter_pot_clay",
   "anthurium_botany_01", "fern_02", "Television_01", "industrial_wall_lamp", "CoffeeCart_01", "wine_barrel_01"];
