@@ -867,7 +867,8 @@ export default function Studio() {
         refs: refs.map((r) => { const b64 = r.url.slice(r.url.indexOf(",") + 1); return { label: r.label ?? null, from: r.from ?? null, type: r.url.slice(5, r.url.indexOf(";")),
           bytes: (b64.length * 3) / 4 - (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0) }; }), refNote,
         looks: msgs.flatMap((m) => (m.kind === "render" && m.look ? [m.look] : [])), takeStill: showing ? `/api/shots/${showing.take.id}/file/look.png` : null,
-        model: builderUse ?? config?.defaults.builder, routes: config?.routes, msgs: msgs.map((m) => ({ kind: m.kind, text: "text" in m ? m.text : undefined })) }),
+        model: builderUse ?? config?.defaults.builder, routes: config?.routes, unavailable: config?.unavailable,
+        models: config ? Object.fromEntries(config.routes.map((r) => [r, { builder: (config.options[r]?.builder ?? []).map((o) => o.id), look: (config.options[r]?.look ?? []).map((o) => o.id) }])) : undefined, msgs: msgs.map((m) => ({ kind: m.kind, text: "text" in m ? m.text : undefined })) }),
       log: () => dbgLog.current.slice(-200),
       // bench/debug_api.py /click and /drag: page px of an object (a spot where a click picks it) / of a gizmo handle
       locate: (name: string) => bridge.current?.locate(name) ?? null,

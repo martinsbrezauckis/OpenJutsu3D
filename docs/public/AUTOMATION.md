@@ -47,7 +47,7 @@ Run several servers for parallel jobs, each with its own browser: `python3 bench
 | Action | Arguments |
 |---|---|
 | `home` | — back to the start page |
-| `openExample` | `id`: `dungeon`, `neon`, `city`, `moon`, `cafe`, `tavern`, `reading`, `temple` |
+| `openExample` | `id`: `masquerade` (ships with its LTX render), `dungeon`, `neon`, `city`, `moon`, `cafe`, `tavern`, `reading`, `temple` |
 | `openBlank` | — an empty studio |
 | `openSaved` | `id` of a saved scene |
 | `openSceneText` | `text`, `name?` — open a shared scene file's JSON as a new scene |
@@ -63,7 +63,7 @@ Run several servers for parallel jobs, each with its own browser: `python3 bench
 | `aspect` | `16:9`, `9:16`, `1:1`, `4:3`, `3:4` or `21:9` |
 | `concept` | `true`/`false` — show a concept picture before building |
 | `chatMode` | `auto`, `ask` (ask first), `go` (don't ask), `chat` (answers only, no changes) |
-| `model` | `route`, `model` — the builder, e.g. `codex`, `gpt-6.1-terra` or `router`, `openai/gpt-6-astra` |
+| `model` | `route`, `model` — the builder: any pair listed in `state().models` (e.g. `codex`, `gpt-6.1-terra`; `claude`, `sonnet`; `agy`, `gemini-4-argon-high`; `router`, `openai/gpt-6-astra`; `anthropic` / `google` with your key). `state().unavailable` says which routes are missing and why (not installed, not logged in, no key) |
 | `startFromPrompt` | — plan and build from `homePrompt` |
 
 **Chat and building**
