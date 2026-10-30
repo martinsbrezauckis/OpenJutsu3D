@@ -471,7 +471,9 @@ export default function Studio() {
     const kept = bad.reduce((s, b) => s.replace(b.block, ""), add);
     const request = `${intent}\n\nREPAIR: these blocks of the code just added ${failed.length ? "failed when run or " : ""}left things hanging in mid-air and were removed:\n`
       + bad.map((b) => `--- error: ${b.error}\n${b.block.trim()}`).join("\n")
-      + "\nWrite corrected replacement blocks for exactly these, with the same intent and names: everything rests on, hangs from or is fixed to something. Do not repeat anything that already worked.";
+      + "\nWrite corrected replacement blocks for exactly these, with the same intent and names: everything rests on, hangs from or is fixed to something. Do not repeat anything that already worked."
+      // a helper declared inside { } in a block that ran fine is invisible to the others (arcade build, 10-30)
+      + (bad.some((b) => /is not defined/.test(b.error)) ? "\nIf a name 'is not defined', it may be a helper declared inside { } braces in another block: declare it again at the top level (outside any braces) in your replacement blocks." : "");
     try {
       const { code: fix, cost } = await api<{ code: string; cost?: Spend & { calls: number } }>("/api/change", { json: { prompt, brief: brief?.brief, codeSoFar: joinCode(base, kept), request, use: use("builder") } });
       addSpend(cost);

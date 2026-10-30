@@ -259,7 +259,9 @@ export async function createViewer({ container = document.body, width = 1280, he
     surfaces = []; kit.root.traverse(o => { if (o.isMesh && o.userData.surface) surfaces.push(o); });
     ssr.selects = surfaces;
     // Only architecture (ENV_*) blocks the camera: passing near a thin prop is fine, crossing a wall is not.
-    solids = []; kit.root.traverse(o => { if (o.isMesh && o.parent?.userData?.category === 'ENV') solids.push(o); });
+    // Glass is not a wall: a camera may film through a window or from outside a glass dome.
+    const glass = (m) => m && (m.transmission > 0.3 || (m.transparent && m.opacity < 0.6));
+    solids = []; kit.root.traverse(o => { if (o.isMesh && o.parent?.userData?.category === 'ENV' && !glass(kit._lit?.get(o) ?? o.material)) solids.push(o); });
     skyInfo = detectSky();
     buildSky();
     result.sky = skyInfo;
@@ -350,7 +352,9 @@ export async function createViewer({ container = document.body, width = 1280, he
     scene.fog = clay || skyInfo.vacuum ? null : fog; bloom.enabled = !clay;
     // SSR replaces the plain render pass in lit mode (only when the set has water surfaces).
     ssr.enabled = !clay && surfaces.length > 0; renderPass.enabled = !ssr.enabled;
-    scene.environment = clay ? null : (skyEnv || envMap); scene.environmentIntensity = skyEnv ? 0.45 : 0.35;   // 0.8 washed out the desert temple
+    // 0.8 washed out the desert temple. At night the white studio environment turned a glossy black floor and chrome
+    // helmets into white washes (arcade, 10-30): reflections there come from the set's own lights and neon instead.
+    scene.environment = clay ? null : (skyEnv || envMap); scene.environmentIntensity = skyEnv ? 0.45 : skyInfo.tod === 'night' ? 0.1 : 0.35;
     const props = kit.props || {}, bg = !clay && props.background ? props.background : null;   // kit.settings()
     if (skyMesh) skyMesh.visible = !clay && !bg;
     // Clay = neutral grey "viewport" look (LTX Layout-To-Render input): scene lights off, white ambient +
@@ -383,12 +387,22 @@ export async function createViewer({ container = document.body, width = 1280, he
   }
 
   /** Fraction (0..1] of the requested look-at→camera distance that is free of walls (spring-arm collision). */
-  function freeFraction(st) {
-    const target = new THREE.Vector3(...st.lookAt), dir = new THREE.Vector3(...st.pos).sub(target), dist = dir.length();
+  /** Solids between the look-at point and `pos`: hit distances from the look-at point, nearest first. */
+  function hitsBetween(lookAt, pos, from = 0) {
+    const target = new THREE.Vector3(...lookAt), dir = new THREE.Vector3(...pos).sub(target), dist = dir.length();
+    if (dist < 1e-3) return [];
+    ray.set(target, dir.normalize()); ray.near = Math.max(0.2, from); ray.far = dist;
+    return ray.intersectObjects(solids, false).map((h) => h.distance);
+  }
+  /** Share of the look-at → camera distance that is free of walls. `seen` = how far from the look-at point the run's
+   *  START pose already looks past architecture (a fountain under a top-down camera, a pillar): the builder framed
+   *  that on purpose, so only walls beyond it pull a moving camera in (the Mars dome's top-down camera collapsed into
+   *  the pool, 10-30). */
+  function freeFraction(st, seen = 0) {
+    const dist = Math.hypot(...st.pos.map((x, k) => x - st.lookAt[k]));
     if (dist < 1e-3) return 1;
-    ray.set(target, dir.normalize()); ray.near = 0.2; ray.far = dist;
-    const hit = ray.intersectObjects(solids, false)[0];
-    return hit ? Math.max(0.3, hit.distance - 0.35) / dist : 1;
+    const hit = hitsBetween(st.lookAt, st.pos, seen)[0];
+    return hit !== undefined ? Math.max(0.3, hit - 0.35) / dist : 1;
   }
   /**
    * Plan a whole shot: raw move states → wall fractions → smoothed (moving min, then moving average) so the camera
@@ -415,7 +429,11 @@ export async function createViewer({ container = document.body, width = 1280, he
     // look-at point swinging into a wall must not drag the camera after it (tavern whip-pan jumped, 10-29). With cuts,
     // "start pose" = the start of that camera's run (st.from), and the smoothing windows stop at a cut.
     const still = (st) => Math.hypot(...st.pos.map((x, k) => x - st.from[k])) < 1e-3;
-    const f = skyInfo.exterior ? raw.map(() => 1) : raw.map((st) => (still(st) ? 1 : freeFraction(st))), win = Math.max(1, Math.round(n / 12));
+    // everything the run's start pose already looks past (the LAST solid on its ray): a pedestal moves the look-at
+    // point too, so a top-down camera's target sinks under the floor and the floor, the water and the frame all lie
+    // between them
+    const seenAt = (st) => { const h = hitsBetween(st.lookAt, st.from); return h.length ? h[h.length - 1] + 0.05 : 0; };
+    const f = skyInfo.exterior ? raw.map(() => 1) : raw.map((st) => (still(st) ? 1 : freeFraction(st, seenAt(st)))), win = Math.max(1, Math.round(n / 12));
     if (skyInfo.exterior) for (const st of raw) st.pos[1] = Math.max(st.pos[1], box.min.y + 1.5);
     const near = (arr, i) => arr.slice(Math.max(0, i - win), i + win + 1).filter((_, j) => raw[Math.max(0, i - win) + j].group === raw[i].group);
     const mins = f.map((_, i) => Math.min(...near(f, i)));

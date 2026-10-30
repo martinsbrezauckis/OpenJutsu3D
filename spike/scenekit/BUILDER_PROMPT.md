@@ -9,7 +9,9 @@ labels you choose are words the video model reads ("brass", "wet_cobblestone"), 
   `Math.random` (the set must rebuild identically — use deterministic formulas instead).
 - Build the set as a sequence of self-contained blocks. End every block with a line containing only `//@@`.
   Each block creates and commits ONE thing (an object, a light, a person, or a camera) so the viewer can
-  stream your set as it is written. Shared helper functions go in the first block.
+  stream your set as it is written. Shared helper functions go in the first block, declared at the TOP LEVEL
+  (`function name(…) { … }` outside any `{ }`): a function declared inside braces exists only inside them, and
+  every later block that calls it fails.
 - First block: `kit.describe({...})`. Last blocks: lights, then cameras.
 
 ## Units and axes
