@@ -873,7 +873,7 @@ export default function Studio() {
     <div>
       <header className="topbar">
         <span className="title">OpenJutsu3D</span><span className="badge">BETA</span>
-        <a className="topbar-link" href="https://github.com/martinsbrezauckis/openjutsu3d" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
+        <a className="topbar-link" href="https://github.com/martinsbrezauckis/OpenJutsu3D" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
       </header>
       <main className="home">
         <section className="hero">
